@@ -1,0 +1,20 @@
+{
+  "name": "ai-chat-manager",
+  "productName": "AI Chat Manager",
+  "version": "0.1.0",
+  "description": "A sticky note for your AI chats: see which Claude chats, Cowork tasks and Code sessions you've been working on.",
+  "private": true,
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/**/*.test.js\"",
+    "dist:win": "electron-packager . \"AI Chat Manager\" --platform=win32 --arch=x64 --out=dist --overwrite --asar --ignore=\"^/(test|dist|scripts)($|/)\""
+  },
+  "dependencies": {
+    "fflate": "^0.8.3"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.4.5"
+  }
+}

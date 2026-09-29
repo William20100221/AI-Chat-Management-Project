@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+  <title>AI Chat Manager</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="brand">AI Chat Manager</h1>
+    <label class="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search" type="search" placeholder="Search titles and questions" autocomplete="off">
+    </label>
+    <div class="topbar-actions">
+      <button id="refresh" class="icon-button" title="Refresh now" aria-label="Refresh now">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
+      </button>
+      <button id="import" class="button">Import chat export</button>
+      <button id="open-settings" class="icon-button" title="Settings and sources" aria-label="Settings and sources">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <nav class="toolbar">
+    <div class="segmented" id="state-tabs" role="tablist" aria-label="Show">
+      <button role="tab" data-state="working" class="active">Working <span class="count" data-count="working"></span></button>
+      <button role="tab" data-state="all">All <span class="count" data-count="all"></span></button>
+      <button role="tab" data-state="done">Done <span class="count" data-count="done"></span></button>
+    </div>
+    <div class="chips" id="source-chips" aria-label="Source">
+      <button data-source="any" class="active">Everything</button>
+      <button data-source="chat">Chat</button>
+      <button data-source="cowork">Cowork</button>
+      <button data-source="code">Code</button>
+    </div>
+  </nav>
+
+  <main class="layout">
+    <section class="list-pane" aria-label="Chats and sessions">
+      <div id="banner" class="banner" hidden></div>
+      <ol id="list" class="list"></ol>
+      <p id="empty" class="empty" hidden></p>
+    </section>
+
+    <section id="detail" class="detail-pane" aria-label="Details">
+      <div class="detail-placeholder">
+        <p>Select a chat to see what it was about.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <span id="status-text"></span>
+  </footer>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <dialog id="settings" class="settings">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <label class="field">
+        <span>Count something as <em>working</em> if it was active in the last</span>
+        <span class="inline"><input id="working-days" type="number" min="1" max="365" step="1"> days</span>
+      </label>
+      <label class="field checkbox">
+        <input id="watch-downloads" type="checkbox">
+        <span>Import my Claude data export automatically when it lands in Downloads</span>
+      </label>
+
+      <h3>How chats get in</h3>
+      <p class="help">Cowork tasks and Code sessions update on their own. Normal chats live on Claude's servers, so they come from your data export: in Claude go to <strong>Settings → Privacy → Export data</strong>, then download the zip from the email. This app spots it in Downloads and imports it.</p>
+
+      <h3>Sources</h3>
+      <ul id="sources" class="sources"></ul>
+
+      <div class="dialog-actions">
+        <button class="button primary" value="close">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
