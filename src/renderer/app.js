@@ -32,6 +32,8 @@ let snap = {
   platforms: [],
   pendingExport: null,
   lastScanAt: null,
+  setupDone: true, // until the app says otherwise
+  system: { os: '', packaged: false, browsers: [] },
 };
 let detailKey = null;
 let lastDetail = null; // the details currently shown, so the list can redraw without re-asking
@@ -170,6 +172,10 @@ function renderCounts() {
 function renderBanner() {
   const banner = $('#banner');
   const nodes = [];
+  if (!snap.setupDone) {
+    banner.hidden = true; // the first-run setup comes first
+    return;
+  }
   const showsChats = view.type === 'any' || view.type === 'chat';
   const pending = snap.pendingExport;
 
@@ -686,6 +692,7 @@ function open(id) {
 function applySnapshot(next) {
   snap = next;
   applyAppearance();
+  renderSetup();
   const selected = view.selectedId && snap.items.find((i) => i.id === view.selectedId);
   if (view.selectedId && !selected) {
     view.selectedId = null;
@@ -726,6 +733,97 @@ function snackbar(text, kind = 'ok') {
   snackbarTimer = setTimeout(() => {
     node.hidden = true;
   }, 4000);
+}
+
+// ---- first-run setup: what the app may read, before it reads anything ----
+
+const SETUP_PAGES = 4;
+let setupPage = 1;
+let setupFinishing = false; // finished, but still showing the last page
+
+function renderSetup() {
+  const dialog = $('#setup');
+  if (!snap.setupDone && !dialog.open) {
+    setupPage = 1;
+    setupFinishing = false;
+    const s = snap.settings;
+    $('#setup-local').checked = s.readLocal;
+    $('#setup-history').checked = s.readHistory;
+    $('#setup-downloads').checked = s.watchDownloads;
+    $('#setup-login').checked = true; // suggested: it's a sticky note
+    $('#setup-login').closest('label').hidden = snap.system.os === 'linux';
+    $('#setup-mac').hidden = snap.system.os !== 'darwin';
+    const browsers = snap.system.browsers || [];
+    $('#setup-browsers').textContent = browsers.length ? `Browsers found on this computer: ${browsers.join(', ')}.` : '';
+    showSetupPage();
+    dialog.showModal();
+  } else if (snap.setupDone && dialog.open && !setupFinishing) {
+    dialog.close();
+  }
+  if (dialog.open && setupPage === SETUP_PAGES) renderSetupSummary();
+}
+
+function showSetupPage() {
+  for (const page of document.querySelectorAll('.setup-page')) page.hidden = Number(page.dataset.page) !== setupPage;
+  document.querySelectorAll('.setup-steps span').forEach((dot, i) => dot.classList.toggle('on', i < setupPage));
+  $('#setup-back').hidden = setupPage === 1 || setupPage === SETUP_PAGES;
+  $('#setup-next').textContent = setupPage === SETUP_PAGES ? 'Start' : setupPage === 3 ? 'Finish setup' : 'Next';
+  if (setupPage === SETUP_PAGES) renderSetupSummary();
+}
+
+function renderSetupSummary() {
+  const used = usedPlatforms();
+  $('#setup-summary').textContent = !snap.lastScanAt
+    ? 'Looking for your AI chats…'
+    : used.length
+      ? `Found ${plural(snap.items.length, 'chat')} on ${used.map((p) => p.name).join(', ')}. More appear as you use your AI apps and websites.`
+      : 'No AI chats found yet. They appear here as soon as you use an AI app or website.';
+}
+
+async function setupNext() {
+  if (setupPage === 3) {
+    setupFinishing = true;
+    await backend.finishSetup({
+      readLocal: $('#setup-local').checked,
+      readHistory: $('#setup-history').checked,
+      watchDownloads: $('#setup-downloads').checked,
+      openAtLogin: $('#setup-login').checked,
+    });
+  }
+  if (setupPage === SETUP_PAGES) {
+    setupFinishing = false;
+    $('#setup').close();
+    return;
+  }
+  setupPage++;
+  showSetupPage();
+}
+
+function wireSetup() {
+  $('#setup-next').addEventListener('click', setupNext);
+  $('#setup-back').addEventListener('click', () => {
+    setupPage = Math.max(1, setupPage - 1);
+    showSetupPage();
+  });
+  // Esc doesn't skip it: the app waits for your answers before reading anything.
+  $('#setup').addEventListener('cancel', (event) => {
+    if (!snap.setupDone || setupFinishing) event.preventDefault();
+  });
+  $('#setup-privacy').addEventListener('click', () => backend.openPrivacySettings());
+  $('#setup-ext-folder').addEventListener('click', () => backend.openExtensionFolder());
+  const copyButton = (id, text) => {
+    const node = $(id);
+    const label = node.lastChild.textContent;
+    node.addEventListener('click', async () => {
+      await backend.copyText(text);
+      node.lastChild.textContent = `Copied: ${text}`;
+      setTimeout(() => {
+        node.lastChild.textContent = label;
+      }, 2500);
+    });
+  };
+  copyButton('#setup-copy-edge', 'edge://extensions');
+  copyButton('#setup-copy-chrome', 'chrome://extensions');
 }
 
 // ---- settings ----
@@ -864,7 +962,6 @@ function renderTesting() {
     : 'Using the default password (it\u2019s in the README, so anyone who reads it knows it).';
   $('#t-password-default').hidden = !t.customPassword;
 
-  $('#t-read-local').checked = t.readLocal;
   $('#t-watch-downloads').checked = t.watchDownloads;
   $('#t-read-browser').checked = t.readBrowser;
   const s = t.stored;
@@ -964,7 +1061,6 @@ function wireTesting() {
     await backend.useDefaultTestingPassword();
     snackbar('Testing password is back to the default.');
   });
-  $('#t-read-local').addEventListener('change', (event) => backend.updateSettings({ readLocal: event.target.checked }));
   $('#t-watch-downloads').addEventListener('change', (event) => backend.updateSettings({ watchDownloads: event.target.checked }));
   $('#t-read-browser').addEventListener('change', (event) => backend.updateSettings({ readBrowser: event.target.checked }));
 
@@ -1006,6 +1102,9 @@ function renderSettings() {
   for (const b of document.querySelectorAll('#color-swatches button')) b.classList.toggle('selected', b.dataset.color === s.themeColor);
   $('#recent-days').value = s.recentDays;
   $('#keep-on-top').checked = s.keepOnTop;
+  $('#open-at-login').checked = s.openAtLogin;
+  $('#open-at-login-row').hidden = snap.system && snap.system.os === 'linux';
+  $('#read-local').checked = s.readLocal;
   $('#watch-downloads').checked = s.watchDownloads;
   renderSources();
 }
@@ -1073,6 +1172,13 @@ function wire() {
   $('#keep-on-top').addEventListener('change', (event) => backend.updateSettings({ keepOnTop: event.target.checked }));
   $('#watch-downloads').addEventListener('change', (event) => backend.updateSettings({ watchDownloads: event.target.checked }));
   $('#read-history').addEventListener('change', (event) => backend.updateSettings({ readHistory: event.target.checked }));
+  $('#read-local').addEventListener('change', (event) => backend.updateSettings({ readLocal: event.target.checked }));
+  $('#open-at-login').addEventListener('change', (event) => backend.updateSettings({ openAtLogin: event.target.checked }));
+  $('#run-setup').addEventListener('click', () => {
+    $('#settings').close();
+    backend.runSetupAgain();
+  });
+  wireSetup();
 
   // Switching between full and compact layout re-draws rows (titles only vs. two lines).
   compactQuery.addEventListener('change', () => {

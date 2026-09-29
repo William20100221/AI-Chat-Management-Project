@@ -17,10 +17,43 @@ It **finds the AI platforms you use by itself**, then gets each one's chats: typ
 - **Recent** shows everything active in the last *X* days (you choose *X*). **Done** holds what you marked done; it comes back if something new happens.
 - Click an item to see its first message, last message and all of your questions, so you can tell which chat it is.
 - **Compact view** (the arrows button at the top) shrinks the window to a narrow list of titles. Click a title to open its details underneath. You can keep it on top of other windows.
-- **Look**: Material Design style, 7 colour themes, and light, dark or system mode (Settings → Appearance). Each platform has its own colour.
+- **Look**: Material Design style, 7 colour themes, and light, dark or system mode (Settings → Appearance). Each platform has its own colour. Scrollbars are a thin line that only shows while you scroll (its length shows how much there is), and can be dragged.
 - Search covers titles *and* the questions you asked.
 
 Everything stays on your computer. The app only **reads** files; it never changes the AI apps' files and never sends anything anywhere.
+
+## Install
+
+No typing, no `npm`: download the installer for your computer and double-click it.
+
+| Computer | File | What happens |
+|---|---|---|
+| **Windows 10/11** | `AI-Chat-Manager-Setup-<version>.exe` | Installs for you only (no admin password), adds Start menu and desktop shortcuts, and opens the app. |
+| **Mac, Apple Silicon** (M1 and later) | `AI-Chat-Manager-<version>-mac-arm64.dmg` (or `.zip`) | Open it and drag **AI Chat Manager** into **Applications**. |
+| **Mac, Intel** | `AI-Chat-Manager-<version>-mac-x64.dmg` (or `.zip`) | The same. |
+
+The installers aren't signed with a paid certificate yet, so the first time, your computer warns you:
+
+- **Windows** shows *"Windows protected your PC"*. Click **More info**, then **Run anyway**.
+- **Mac** says it *"can't verify"* the app. Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to AI Chat Manager. (On macOS 14 and older you can also right-click the app → **Open**.)
+
+This happens once. Signing certificates (about US$99 a year from Apple, and from a Windows certificate seller) would remove the warnings.
+
+### The first time it opens
+
+A short setup asks what the app may read, before it reads anything:
+
+1. **AI apps on this computer**, **browser history (AI chat pages only)** and **data exports in Downloads**: each on/off.
+2. **Start when I log in**, so it's always up to date.
+3. On a Mac: macOS itself asks once whether the app may open **Downloads** (click *Allow*). For Safari's history, the setup has a button to the *Full Disk Access* settings.
+4. **The browser extension** (optional): *Open extension folder* and *Copy address* buttons, and three steps. Browsers don't let apps install extensions by themselves.
+
+Everything can be changed later in Settings, which also has *Run the first-run setup again*.
+
+### Uninstall
+
+- **Windows:** Settings → Apps → AI Chat Manager → Uninstall. Your data stays in `%APPDATA%\AI Chat Manager`; delete that folder too to remove everything.
+- **Mac:** drag AI Chat Manager from Applications to the Bin. Your data is in `~/Library/Application Support/AI Chat Manager`.
 
 ## Where the data comes from
 
@@ -161,7 +194,6 @@ Tools for trying the app out while it's being built. They're behind a password s
 
 | Tool | What it does |
 |---|---|
-| **Read AI apps' files on this computer** | On/off. Off hides Cowork, Code, Work, Codex and Gemini CLI sessions, as if no AI apps were installed, so you can try the "connect the websites instead" flow. |
 | **Import the Claude export from Downloads automatically** | On/off. The same setting as in Behaviour. |
 | **Receive chats from the browser extension** | On/off. While off, the extension keeps its updates, and its button says *Paused*. They arrive when you switch it back on. |
 | **Delete all stored data** | Click **Delete**, then **Click again to delete**. It forgets everything *this app* saved: imported and browser chats, pins, done marks and what you've seen. Leave *Also clear the browser extension's saved copy* ticked, or the extension sends it all back at its next check-in. Claude's own files are never touched. Settings and your password stay. |
@@ -190,11 +222,21 @@ Delete:
 - the block marked `Testing tools` in `src/renderer/index.html`;
 - the *Testing tools* section in `src/renderer/app.js`;
 - the `testing:` handlers and `testingSnapshot` in `src/main/main.js`;
-- the password functions and the `readLocal` / `readBrowser` settings in `src/core/store.js`.
+- the password functions and the `readBrowser` setting in `src/core/store.js`.
 
-## Run it
+## Build the installers
 
-Needs [Node.js](https://nodejs.org) 22.5 or newer (22 LTS or later), for its built-in SQLite reader.
+Three ways, none needing more than a double-click or two:
+
+- **GitHub Actions (both at once):** `.github/workflows/installers.yml` builds the Windows installer and the Mac apps on GitHub's own Windows and Mac computers every time you push. The files are under the run's **Artifacts** (Actions tab). Push a tag like `v0.9.1` and they're also attached to a **Release**, a download page you can link people to.
+- **On Windows:** double-click **`Build Windows installer.bat`**. The installer lands in `dist\`.
+- **On a Mac:** double-click **`Build Mac app.command`** (the first time: right-click → Open). The `.dmg` and `.zip` land in `dist/`.
+
+The double-click builds need [Node.js](https://nodejs.org) 22.5 or newer; if it's missing, they open its download page. In a terminal it's `npm run dist:win`, `npm run dist:mac`, or `npm run dist` for both. `scripts/build.js` explains how it also builds both from Linux (no Wine needed; the Mac app is signed "ad hoc" with rcodesign, and zipped, since a `.dmg` needs a Mac).
+
+The app's icon is `build/icon.svg`; `npm run icon` redraws `build/icon.png` from it, and the installers make the Windows and Mac icons from that.
+
+## Run it from the source (for development)
 
 ```
 npm install
@@ -202,7 +244,6 @@ npm start
 ```
 
 - `npm test` runs the tests.
-- `npm run dist:win` builds a Windows app into `dist\`.
 - If `npm start` says Electron failed to install, run `node node_modules/electron/install.js` once.
 
 ## How it's built
@@ -234,9 +275,11 @@ src/core/        reading and combining the sources (no Electron code, fully test
   scanner.js         combines everything into one list, re-reading only changed files
   status.js          replying / new reply / pinned / recent / done
   store.js           your settings, pins, done marks and what you've seen (state.json in the app data folder)
-src/main/main.js the app process: window (full and compact), file watching, Downloads check
+src/main/main.js the app process: window (full and compact), first-run setup, file watching, Downloads check
+build/           the app icon (icon.svg → icon.png) for the installers
+scripts/         build.js (the installers), make-icon.js
 src/preload.js   the small bridge the window is allowed to use
-src/renderer/    the window: platforms, list, details, settings, themes
+src/renderer/    the window: platforms, list, details, settings, themes, thin scrollbars (scrollbars.js)
 test/            unit tests with fake user folders (Windows, Mac, Linux) and fake browser histories
 ```
 
@@ -253,4 +296,4 @@ Icons are from [Material Icons](https://fonts.google.com/icons) (Apache License 
 - **Plain chats inside the desktop apps' own windows** (Claude Desktop's chats, ChatGPT's Chat mode, the Microsoft Copilot app). Desktop apps don't write a browser history, and they keep those chats on the companies' servers, or encrypted. Use the website or the export for them.
 - Knowing when you read a Cowork, Code, Work or Codex reply inside that app itself.
 - Opening a Cowork task or a Code session directly in Claude Desktop. For now: **Copy resume command** and **Folder**. (Work and Codex chats do open in the ChatGPT app.)
-- App icon, installer, start with Windows, desktop notifications, Mac and Linux builds.
+- Signed installers (no first-run warning), automatic updates, desktop notifications, a Linux package.

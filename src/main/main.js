@@ -11,6 +11,7 @@ const { applyWebEvents, combineChats } = require('../core/webChats');
 const { startBridge } = require('../core/webBridge');
 const { ExtensionLink } = require('../core/extensionLink');
 const { platform: platformInfo, describePlatforms } = require('../core/platforms');
+const { findHistoryFiles } = require('../core/browserHistory');
 const { platformUsage } = require('../core/detect');
 
 const RESCAN_EVERY_MS = 30 * 1000;
@@ -33,7 +34,8 @@ let downloadsWatcher = null;
 let bridge = { listening: false, error: null };
 let link = null; // the browser extension: connected or not, and what we want from it
 let testingUnlocked = false; // Testing panel (temporary, for development); password lives in the store
-const TESTING_SETTINGS = ['readLocal', 'readBrowser'];
+const TESTING_SETTINGS = ['readBrowser'];
+let started = false; // scanning starts once the first-run setup is done
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -70,6 +72,8 @@ function snapshot() {
       ? { createdAt: store.data.pendingExport.createdAt, opened: Boolean(store.data.pendingExport.openedAt) }
       : null,
     lastScanAt,
+    setupDone: store.data.setupDone,
+    system: { os: process.platform, packaged: app.isPackaged, browsers: installedBrowsers() },
     connections: connections(),
     testing: testingSnapshot(),
   };
@@ -106,6 +110,37 @@ function testingSnapshot() {
 
 function pushSnapshot() {
   send('snapshot', snapshot());
+}
+
+// Browsers found on this computer (by their history files), for the extension step of the setup.
+function installedBrowsers() {
+  try {
+    return [...new Set(findHistoryFiles().map((f) => f.browser))];
+  } catch {
+    return [];
+  }
+}
+
+// Starts reading once you've said what the app may read (the first-run setup).
+function startScanning() {
+  if (started) return;
+  started = true;
+  rescan().then(checkDownloads);
+  watchDownloads();
+  setInterval(() => {
+    rescan();
+    checkDownloads();
+  }, RESCAN_EVERY_MS);
+}
+
+// "Start when I log in". Only for the installed app: in development it would start Electron itself.
+function applyLoginItem() {
+  if (!app.isPackaged || process.platform === 'linux') return;
+  try {
+    app.setLoginItemSettings({ openAtLogin: Boolean(store.settings.openAtLogin) });
+  } catch {
+    // not supported here
+  }
 }
 
 // Runs one scan at a time; a request during a scan queues exactly one more.
@@ -201,7 +236,7 @@ async function waitUntilStable(file) {
 
 let checkingDownloads = false;
 async function checkDownloads() {
-  if (!store.settings.watchDownloads || checkingDownloads) return;
+  if (!started || !store.settings.watchDownloads || checkingDownloads) return;
   checkingDownloads = true;
   try {
     const candidates = await findCandidateFiles(app.getPath('downloads'), store.data.seenFiles);
@@ -240,7 +275,7 @@ function watchDownloads() {
     downloadsWatcher.close();
     downloadsWatcher = null;
   }
-  if (!store.settings.watchDownloads) return;
+  if (!started || !store.settings.watchDownloads) return;
   try {
     downloadsWatcher = fs.watch(app.getPath('downloads'), checkDownloadsSoon);
     downloadsWatcher.on('error', () => {
@@ -483,6 +518,7 @@ function registerIpc() {
       rescanSoon();
     }
     if (after.readHistory !== before.readHistory) rescan({ forceHistory: true });
+    if (after.openAtLogin !== before.openAtLogin) applyLoginItem();
     if (after.readBrowser && !before.readBrowser) link.requestResync(); // collect what waited meanwhile
     if (after.themeMode !== before.themeMode) applyTheme();
     if (after.watchDownloads !== before.watchDownloads) {
@@ -604,10 +640,52 @@ function registerIpc() {
     if (fs.existsSync(folder)) await shell.openPath(folder);
   });
 
+  // The first-run setup: what the app may read, and whether it starts when you log in.
+  ipcMain.handle('setup:finish', async (_e, choices) => {
+    const allowed = {};
+    for (const key of ['readLocal', 'readHistory', 'watchDownloads', 'openAtLogin']) {
+      if (typeof (choices || {})[key] === 'boolean') allowed[key] = choices[key];
+    }
+    store.updateSettings(allowed);
+    store.data.setupDone = true;
+    store.save();
+    applyLoginItem();
+    startScanning();
+    pushSnapshot();
+  });
+
+  ipcMain.handle('setup:again', () => {
+    store.data.setupDone = false;
+    store.save();
+    pushSnapshot();
+  });
+
+  // Mac: Safari's history needs "Full Disk Access"; this opens that page of System Settings.
+  ipcMain.handle('system:open-privacy', async () => {
+    if (process.platform === 'darwin') await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
+  });
+
+  ipcMain.handle('clipboard:copy', (_e, text) => {
+    if (typeof text === 'string' && text.length < 500) clipboard.writeText(text);
+  });
+
   ipcMain.handle('source:open', async (_e, index) => {
     const source = sources[index];
     if (source && source.path && fs.existsSync(source.path)) await shell.openPath(source.path);
   });
+}
+
+// Windows and Linux: no menu bar. Mac: the usual app menu, which also makes copy and paste work.
+function setMenu() {
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+    { role: 'windowMenu' },
+  ]));
 }
 
 function createWindow() {
@@ -648,16 +726,12 @@ if (!app.requestSingleInstanceLock()) {
     store = new Store(path.join(app.getPath('userData'), 'state.json'));
     link = new ExtensionLink(store.data.web.extension);
     applyTheme();
-    Menu.setApplicationMenu(null);
+    setMenu();
     registerIpc();
     startBrowserBridge();
     createWindow();
-    rescan().then(checkDownloads);
-    watchDownloads();
-    setInterval(() => {
-      rescan();
-      checkDownloads();
-    }, RESCAN_EVERY_MS);
+    applyLoginItem();
+    if (store.data.setupDone) startScanning(); // otherwise the setup in the window asks first
   });
 
   app.on('window-all-closed', () => app.quit());

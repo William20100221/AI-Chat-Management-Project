@@ -1,23 +1,106 @@
 {
   "name": "ai-chat-manager",
   "productName": "AI Chat Manager",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "A sticky note for your AI chats across platforms: finds the AI platforms you use and shows which chats and sessions need you.",
   "private": true,
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test \"test/**/*.test.js\"",
-    "dist:win": "electron-packager . \"AI Chat Manager\" --platform=win32 --arch=x64 --out=dist --overwrite --asar --ignore=\"^/(test|dist|scripts|extension)($|/)\" --extra-resource=extension"
+    "dist:win": "node scripts/build.js win",
+    "dist:mac": "node scripts/build.js mac",
+    "dist": "node scripts/build.js all",
+    "icon": "electron scripts/make-icon.js"
   },
   "dependencies": {
     "fflate": "^0.8.3"
   },
   "devDependencies": {
-    "@electron/packager": "^20.3.0",
-    "electron": "^44.4.5"
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3"
   },
   "engines": {
     "node": ">=22.5"
+  },
+  "author": {
+    "name": "AI Chat Manager"
+  },
+  "build": {
+    "appId": "io.github.william20100221.aichatmanager",
+    "productName": "AI Chat Manager",
+    "copyright": "AI Chat Manager contributors",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "extension",
+        "to": "extension"
+      }
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "AI-Chat-Manager-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AI Chat Manager",
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.productivity",
+      "artifactName": "AI-Chat-Manager-${version}-mac-${arch}.${ext}",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "NSDownloadsFolderUsageDescription": "AI Chat Manager looks in Downloads for your Claude and ChatGPT data exports, so it can import them. Nothing leaves your computer.",
+        "NSDocumentsFolderUsageDescription": "AI Chat Manager reads the AI apps' session files on this computer to list your chats. Nothing leaves your computer.",
+        "NSDesktopFolderUsageDescription": "AI Chat Manager reads the AI apps' session files on this computer to list your chats. Nothing leaves your computer."
+      }
+    },
+    "dmg": {
+      "title": "AI Chat Manager ${version}"
+    },
+    "publish": null
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/william20100221/ai-chat-management-project.git"
   }
 }

@@ -200,7 +200,7 @@ test('ChatGPT app: Work and Codex chats appear under ChatGPT with the app’s ti
   await scanner.scan([]);
   assert.equal(scanner.threadsCache.readAt, firstRead);
 
-  // Turned off in Testing: nothing from this computer.
+  // Turned off in Settings: nothing from this computer.
   const off = await new Scanner({ home, platform: 'win32', env }).scan([], { local: false });
   assert.equal(off.items.length, 0);
 });

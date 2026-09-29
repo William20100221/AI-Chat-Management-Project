@@ -116,7 +116,7 @@ class Scanner {
       app: 'Gemini CLI',
       platform: 'gemini',
       kind: 'files',
-      note: local ? undefined : 'Turned off in Testing',
+      note: local ? undefined : 'Turned off in Settings',
     };
     if (!source.found) return [source];
     for (const { file, project } of await geminiCli.findSessionFiles(home)) {
@@ -140,7 +140,7 @@ class Scanner {
     const apps = local ? findChatGPTApps(this.locateOptions) : [];
     const app = apps.find((a) => a.kind === 'current') || null;
     const classic = apps.find((a) => a.kind === 'classic') || null;
-    const off = local ? undefined : 'Turned off in Testing';
+    const off = local ? undefined : 'Turned off in Settings';
 
     const appSource = {
       label: 'ChatGPT app – Work and Codex chats',
@@ -277,7 +277,7 @@ class Scanner {
     return index;
   }
 
-  // local: false skips AI apps' files on this computer (a Testing panel switch).
+  // local: false skips AI apps' files on this computer (Settings → Connections).
   // history: false skips browser history (Settings); forceHistory re-reads it now (Refresh).
   async scan(importedChats = [], { local = true, history = true, forceHistory = false } = {}) {
     const locations = local
@@ -337,7 +337,7 @@ class Scanner {
       app: 'Claude Code',
       platform: 'claude',
       kind: 'files',
-      note: local ? undefined : 'Turned off in Testing',
+      note: local ? undefined : 'Turned off in Settings',
     };
     sources.push(terminal);
     for (const [sessionId, file] of projectTranscripts) {

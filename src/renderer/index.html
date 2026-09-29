@@ -34,14 +34,14 @@
   </nav>
 
   <main class="layout">
-    <section class="list-pane" aria-label="Chats and sessions">
+    <section class="list-pane" aria-label="Chats and sessions" data-thin-scroll>
       <div id="banner" class="banner" hidden></div>
       <div id="list-tools" class="list-tools" hidden></div>
       <ol id="list" class="list"></ol>
       <p id="empty" class="empty" hidden></p>
     </section>
 
-    <section id="detail" class="detail-pane" aria-label="Details">
+    <section id="detail" class="detail-pane" aria-label="Details" data-thin-scroll>
       <div class="detail-placeholder">Select a chat to see what it was about.</div>
     </section>
   </main>
@@ -50,8 +50,77 @@
 
   <div id="snackbar" class="snackbar" role="status" hidden></div>
 
+  <!-- First-run setup: what the app may read, before it reads anything. -->
+  <dialog id="setup" class="dialog setup">
+    <div class="dialog-body" data-thin-scroll>
+    <div class="setup-steps" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+
+    <section class="setup-page" data-page="1">
+      <div class="setup-hero"><span data-icon="chat"></span></div>
+      <h2>Welcome to AI Chat Manager</h2>
+      <p>A sticky note for your AI chats. It finds the AI apps and websites you use (Claude, ChatGPT, Gemini, Copilot and more) and shows which chats need you: the AI is replying, has replied, or is asking you something.</p>
+      <p class="help">Everything stays on this computer. The app only reads; it never changes the AI apps' files and never sends anything anywhere.</p>
+    </section>
+
+    <section class="setup-page" data-page="2" hidden>
+      <h2>What may it read?</h2>
+      <p class="help">You can change these any time in Settings.</p>
+      <label class="setup-choice">
+        <input id="setup-local" type="checkbox" class="switch" checked>
+        <span><strong>AI apps on this computer</strong><br><span class="help small">Claude Desktop, Claude Code, the ChatGPT app, Codex and Gemini CLI keep your sessions in files here.</span></span>
+      </label>
+      <label class="setup-choice">
+        <input id="setup-history" type="checkbox" class="switch" checked>
+        <span><strong>Browser history: AI chat pages only</strong><br><span class="help small">Finds chats you opened on AI websites (titles and dates). Nothing else from your history is read.</span></span>
+      </label>
+      <label class="setup-choice">
+        <input id="setup-downloads" type="checkbox" class="switch" checked>
+        <span><strong>Data exports in Downloads</strong><br><span class="help small">When you download your Claude or ChatGPT data export, it's imported automatically.</span></span>
+      </label>
+      <label class="setup-choice">
+        <input id="setup-login" type="checkbox" class="switch" checked>
+        <span><strong>Start when I log in</strong><br><span class="help small">So it's always up to date, even for chats you start before opening it.</span></span>
+      </label>
+      <div id="setup-mac" class="setup-note" hidden>
+        <p><strong>On a Mac:</strong> macOS will ask whether AI Chat Manager may open your Downloads folder. Click <em>Allow</em> for exports to be imported.</p>
+        <p>Safari's history needs <em>Full Disk Access</em>: turn on AI Chat Manager in the list that opens. Other browsers don't need this.</p>
+        <button type="button" id="setup-privacy" class="button outlined small">Open Privacy settings</button>
+      </div>
+    </section>
+
+    <section class="setup-page" data-page="3" hidden>
+      <h2>Live chats from AI websites <span class="help">(optional)</span></h2>
+      <p>With the browser extension, the app also shows when a website's AI is replying, new replies, and your questions. Browsers don't let apps install extensions by themselves, so it takes a few clicks:</p>
+      <p id="setup-browsers" class="help"></p>
+      <ol class="steps">
+        <li>Click <strong>Open extension folder</strong> below.</li>
+        <li>In your browser, open the extensions page (<strong>Copy address</strong>, then paste it into the address bar), turn on <em>Developer mode</em>, click <em>Load unpacked</em> and choose that folder.</li>
+        <li>Open or reload your AI websites. That's it.</li>
+      </ol>
+      <div class="setup-actions-inline">
+        <button type="button" id="setup-ext-folder" class="button tonal small"><span data-icon="folder"></span>Open extension folder</button>
+        <button type="button" id="setup-copy-edge" class="button outlined small"><span data-icon="copy"></span>Copy address (Edge)</button>
+        <button type="button" id="setup-copy-chrome" class="button outlined small"><span data-icon="copy"></span>Copy address (Chrome)</button>
+      </div>
+      <p class="help small">Firefox: about:debugging → This Firefox → Load Temporary Add-on → choose manifest.json in that folder. You can also do all this later from Settings → Connections.</p>
+    </section>
+
+    <section class="setup-page" data-page="4" hidden>
+      <div class="setup-hero done"><span data-icon="check"></span></div>
+      <h2>All set</h2>
+      <p id="setup-summary">Your AI chats will appear in a moment.</p>
+      <p class="help">Tip: the arrows button at the top shrinks the window to a narrow list of titles, like a sticky note.</p>
+    </section>
+    </div>
+
+    <div class="setup-actions">
+      <button type="button" id="setup-back" class="button text" hidden>Back</button>
+      <button type="button" id="setup-next" class="button filled">Next</button>
+    </div>
+  </dialog>
+
   <dialog id="settings" class="dialog">
-    <form method="dialog">
+    <form method="dialog" class="dialog-body" data-thin-scroll>
       <h2 tabindex="-1" autofocus class="dialog-title">Settings</h2>
 
       <h3 id="platforms-heading">Your AI platforms</h3>
@@ -67,6 +136,10 @@
             <div class="conn-title">AI apps on this computer</div>
             <div class="conn-sub">Claude Desktop (Cowork, Code), Claude Code, ChatGPT app (Work, Codex), Codex CLI, Gemini CLI</div>
             <div class="conn-state" id="conn-local-state">Checking…</div>
+            <label class="switch-row">
+              <span>Read AI apps' files on this computer</span>
+              <input id="read-local" type="checkbox" class="switch">
+            </label>
           </div>
         </li>
         <li class="connection" id="conn-history">
@@ -132,10 +205,15 @@
         <span>Keep the compact window on top of other windows</span>
         <input id="keep-on-top" type="checkbox" class="switch">
       </label>
+      <label class="switch-row" id="open-at-login-row">
+        <span>Start AI Chat Manager when I log in</span>
+        <input id="open-at-login" type="checkbox" class="switch">
+      </label>
       <label class="switch-row">
         <span>Import my Claude data export automatically from Downloads</span>
         <input id="watch-downloads" type="checkbox" class="switch">
       </label>
+      <button type="button" id="run-setup" class="button text small">Run the first-run setup again</button>
 
       <h3>Chat history</h3>
       <p class="help">For chats from before you installed the extension, use each platform's data export. Download the file from the email, and this app spots it in Downloads and imports it.</p>
@@ -159,7 +237,6 @@
         <p id="testing-error" class="help error" hidden>Wrong password</p>
       </div>
       <div id="testing-open" hidden>
-        <label class="switch-row"><span>Read AI apps' files on this computer (Claude, ChatGPT app, Codex, Gemini CLI)</span><input id="t-read-local" type="checkbox" class="switch"></label>
         <label class="switch-row"><span>Import the Claude export from Downloads automatically</span><input id="t-watch-downloads" type="checkbox" class="switch"></label>
         <label class="switch-row"><span>Receive chats from the browser extension</span><input id="t-read-browser" type="checkbox" class="switch"></label>
         <div class="danger-zone">
@@ -203,6 +280,7 @@
   </dialog>
 
   <script src="icons.js"></script>
+  <script src="scrollbars.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,0 +1,55 @@
+# Builds the Windows installer and the Mac apps on GitHub's own Windows and Mac computers.
+# - Every push: the files appear under the run's "Artifacts" (Actions tab), about 10 minutes later.
+# - A tag like v0.9.0: they're also attached to a GitHub Release, a download page for everyone.
+# - Or run it by hand: Actions → Installers → Run workflow.
+name: Installers
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+            files: |
+              dist/*.exe
+          - os: macos-latest
+            target: mac
+            files: |
+              dist/*.dmg
+              dist/*.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Build
+        run: npm run dist:${{ matrix.target }}
+        env:
+          # No paid signing certificate: Windows gets an unsigned installer, the Mac app an
+          # "ad hoc" signature (what Apple Silicon needs to open it at all).
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.target }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.files }}
