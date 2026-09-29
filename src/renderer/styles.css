@@ -33,6 +33,21 @@
   --claude-container: light-dark(oklch(0.93 0.04 45), oklch(0.36 0.06 45));
   --chatgpt: light-dark(oklch(0.5 0.1 170), oklch(0.8 0.08 170));
   --chatgpt-container: light-dark(oklch(0.93 0.04 170), oklch(0.35 0.05 170));
+  /* the other platforms: one hue each, same lightness and chroma, so they read as one family */
+  --gemini: light-dark(oklch(0.52 0.14 265), oklch(0.8 0.09 265));
+  --gemini-container: light-dark(oklch(0.93 0.04 265), oklch(0.36 0.06 265));
+  --copilot: light-dark(oklch(0.52 0.12 225), oklch(0.8 0.08 225));
+  --copilot-container: light-dark(oklch(0.93 0.04 225), oklch(0.36 0.05 225));
+  --perplexity: light-dark(oklch(0.52 0.09 200), oklch(0.8 0.07 200));
+  --perplexity-container: light-dark(oklch(0.93 0.03 200), oklch(0.36 0.05 200));
+  --deepseek: light-dark(oklch(0.5 0.14 250), oklch(0.8 0.09 250));
+  --deepseek-container: light-dark(oklch(0.93 0.04 250), oklch(0.36 0.06 250));
+  --grok: light-dark(oklch(0.4 0.02 280), oklch(0.85 0.02 280));
+  --grok-container: light-dark(oklch(0.92 0.01 280), oklch(0.36 0.01 280));
+  --mistral: light-dark(oklch(0.58 0.15 55), oklch(0.82 0.1 60));
+  --mistral-container: light-dark(oklch(0.94 0.05 60), oklch(0.37 0.06 55));
+  --poe: light-dark(oklch(0.5 0.15 300), oklch(0.8 0.1 300));
+  --poe-container: light-dark(oklch(0.93 0.04 300), oklch(0.36 0.06 300));
 
   --hover: color-mix(in oklch, var(--on-surface) 8%, transparent);
   --pressed: color-mix(in oklch, var(--on-surface) 12%, transparent);
@@ -203,6 +218,13 @@ button {
 
 .platform-claude { --pc: var(--claude); --pc-container: var(--claude-container); }
 .platform-chatgpt { --pc: var(--chatgpt); --pc-container: var(--chatgpt-container); }
+.platform-gemini { --pc: var(--gemini); --pc-container: var(--gemini-container); }
+.platform-copilot { --pc: var(--copilot); --pc-container: var(--copilot-container); }
+.platform-perplexity { --pc: var(--perplexity); --pc-container: var(--perplexity-container); }
+.platform-deepseek { --pc: var(--deepseek); --pc-container: var(--deepseek-container); }
+.platform-grok { --pc: var(--grok); --pc-container: var(--grok-container); }
+.platform-mistral { --pc: var(--mistral); --pc-container: var(--mistral-container); }
+.platform-poe { --pc: var(--poe); --pc-container: var(--poe-container); }
 
 /* ---- platform row ---- */
 
@@ -325,7 +347,20 @@ button {
 }
 
 .platform-option:hover { background: var(--hover); }
-.platform-option .option-name { flex: 1; }
+.platform-option .option-name { flex: 1; display: flex; flex-direction: column; }
+.platform-option .option-note { font-size: 11px; color: var(--on-surface-variant); }
+.platform-option.unused { color: var(--on-surface-variant); }
+.platform-option.unused .platform-dot { opacity: 0.45; }
+
+/* ---- Settings: your AI platforms ---- */
+
+.platform-usage { list-style: none; margin: 8px 0 4px; padding: 0; display: grid; gap: 6px; }
+.platform-usage .usage { padding: 10px 12px; border-radius: 12px; background: var(--surface-container); }
+.usage-head { display: flex; align-items: center; gap: 8px; }
+.usage-head .platform-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--pc); flex: none; }
+.usage-count { margin-left: auto; font-size: 12px; color: var(--on-surface-variant); }
+.usage-sign { margin: 3px 0 0 18px; font-size: 13px; color: var(--on-surface-variant); }
+.row-title.untitled { font-style: italic; color: var(--on-surface-variant); }
 
 /* ---- layout ---- */
 
@@ -540,7 +575,7 @@ button {
 }
 
 .label-chip .icon { width: 16px; height: 16px; }
-.label-chip.platform-claude, .label-chip.platform-chatgpt { border-color: transparent; background: var(--pc-container); color: var(--pc); }
+.label-chip[class*="platform-"] { border-color: transparent; background: var(--pc-container); color: var(--pc); }
 
 .state-card {
   display: flex;
@@ -1030,3 +1065,5 @@ button {
 .filters .platform-bar { width: 100%; min-width: 0; }
 body > * { min-width: 0; }
 .conn-sub { font-size: 12px; color: var(--on-surface-variant); }
+
+.dialog-title:focus { outline: none; }

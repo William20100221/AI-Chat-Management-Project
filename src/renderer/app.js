@@ -6,7 +6,7 @@
 const backend = window.api; // "api" itself is taken: the bridge defines window.api as a global
 const icon = window.icon;
 
-const TYPE_ICONS = { chat: 'chat', cowork: 'cowork', code: 'code', work: 'cowork', codex: 'code' };
+const TYPE_ICONS = { chat: 'chat', cowork: 'cowork', code: 'code', work: 'cowork', codex: 'code', cli: 'code' };
 const WORKING = new Set(['asking', 'responding', 'new-reply', 'pinned']);
 const WORKING_ORDER = { asking: 0, responding: 1, 'new-reply': 2, pinned: 3 };
 const WORKING_GROUPS = { asking: 'Asking you', responding: 'Replying now', 'new-reply': 'New replies', pinned: 'Pinned' };
@@ -118,6 +118,11 @@ function agentName(item) {
   return item.source === 'codex' ? 'Codex' : platformOf(item.platform).name;
 }
 
+// The platforms you use (found on this computer, in history, the extension or an export).
+function usedPlatforms() {
+  return snap.platforms.filter((p) => p.used);
+}
+
 function describeItem(item) {
   return `${platformOf(item.platform).name} \u00b7 ${typeName(item)}`;
 }
@@ -186,9 +191,9 @@ function renderBanner() {
     const text = el('p');
     const site = platformOf(view.platform || 'claude');
     if (ext.everConnected) {
-      text.append(el('strong', null, 'The browser extension isn’t connected. '), 'Open your browser (claude.ai or chatgpt.com) and it reconnects within a minute.');
+      text.append(el('strong', null, 'The browser extension isn’t connected. '), 'Open an AI website in your browser and it reconnects within a minute.');
     } else {
-      text.append(el('strong', null, 'No AI apps found on this computer. '), 'Connect your browser to see your claude.ai and chatgpt.com chats here.');
+      text.append(el('strong', null, 'No AI apps or AI chats in your browser history found. '), 'Connect your browser to see your chats from AI websites here.');
     }
     const actions = el('div', 'banner-actions');
     actions.append(button(ext.everConnected ? `Open ${site.websiteName}` : 'Connect', {
@@ -201,7 +206,9 @@ function renderBanner() {
     const text = el('p');
     text.append(
       el('strong', null, 'Want your website chats here too? '),
-      'Connect the browser extension to see claude.ai and chatgpt.com chats live, or import your data exports for older ones.',
+      snap.settings.readHistory
+        ? 'None were found in your browser history yet. Connect the browser extension to see your AI website chats live, or import your data exports.'
+        : 'Turn on browser history in Settings, or connect the browser extension, to see your chats from AI websites.',
     );
     const actions = el('div', 'banner-actions');
     actions.append(
@@ -217,7 +224,7 @@ function renderBanner() {
 
 function needsWebsite() {
   const c = snap.connections;
-  return Boolean(c && c.local.scanned && !c.local.found && !c.extension.connected);
+  return Boolean(c && c.local.scanned && !c.local.found && !c.extension.connected && !(c.history && c.history.chats));
 }
 
 function hintDismissed() {
@@ -252,7 +259,7 @@ function renderEmpty(count) {
   empty.hidden = count > 0;
   if (count > 0) return;
   if (view.searchIds) empty.textContent = 'Nothing matches your search.';
-  else if (view.tab === 'working') empty.textContent = 'Nothing needs you right now. Chats appear here when Claude asks you something, while it’s replying, when a reply is waiting for you, or when you pin them.';
+  else if (view.tab === 'working') empty.textContent = 'Nothing needs you right now. Chats appear here when an AI asks you something, while it’s replying, when a reply is waiting for you, or when you pin them.';
   else if (view.tab === 'done') empty.textContent = 'Nothing marked as done.';
   else if (view.tab === 'recent') empty.textContent = `Nothing active in the last ${plural(snap.settings.recentDays, 'day')}.`;
   else empty.textContent = 'No chats or sessions found yet. Check Settings → Sources.';
@@ -279,7 +286,7 @@ function rowFor(item) {
   avatar.title = describeItem(item);
 
   const main = el('div', 'row-main');
-  main.append(el('div', 'row-title', item.title));
+  main.append(el('div', `row-title${item.untitled ? ' untitled' : ''}`, item.title));
   const support = el('div', 'row-support');
   const where = view.platform ? typeName(item) : describeItem(item);
   if (item.state === 'asking') support.append(el('span', 'live', item.question ? `Asks: ${item.question}` : `${agentName(item)} is asking you`));
@@ -328,7 +335,7 @@ function renderStatus() {
   const parts = [];
   if (asking) parts.push(`${asking} asking you`);
   if (replying) parts.push(`${replying} replying now`);
-  for (const p of snap.platforms) {
+  for (const p of usedPlatforms()) {
     const count = snap.items.filter((i) => i.platform === p.id).length;
     parts.push(`${p.name} ${count}`);
   }
@@ -404,13 +411,18 @@ function platformMenu(counts) {
   const list = el('ul', 'platform-list');
   const fill = () => {
     const query = input.value.trim().toLowerCase();
-    const matches = snap.platforms.filter((p) => p.name.toLowerCase().includes(query) || p.id.includes(query));
+    // The ones you use first; the rest are there too, marked "not found yet".
+    const matches = snap.platforms
+      .filter((p) => p.name.toLowerCase().includes(query) || p.id.includes(query) || (p.websiteName || '').includes(query))
+      .sort((a, b) => Number(b.used) - Number(a.used));
     list.replaceChildren(...(matches.length
       ? matches.map((p) => {
         const li = el('li');
-        const option = el('button', `platform-option platform-${p.id}`);
+        const option = el('button', `platform-option platform-${p.id}${p.used ? '' : ' unused'}`);
         option.type = 'button';
-        option.append(el('span', 'platform-dot'), el('span', 'option-name', p.name), el('span', 'count', String(counts[p.id] || 0)));
+        const name = el('span', 'option-name', p.name);
+        if (!p.used) name.append(el('span', 'option-note', 'not found yet'));
+        option.append(el('span', 'platform-dot'), name, el('span', 'count', String(counts[p.id] || 0)));
         option.addEventListener('click', () => enterPlatform(p.id));
         li.append(option);
         return li;
@@ -437,7 +449,7 @@ function renderPlatformBar() {
   const nodes = [];
   if (!view.platform) {
     nodes.push(chip('All platforms', { selected: true, count: counts.all }));
-    for (const p of snap.platforms) {
+    for (const p of usedPlatforms()) {
       const node = chip(p.name, { count: counts[p.id] || 0, className: `platform-chip platform-${p.id}`, onClick: () => enterPlatform(p.id) });
       node.prepend(el('span', 'platform-dot'));
       node.append(icon('chevronRight', 'enter-icon'));
@@ -467,7 +479,10 @@ function renderPlatformBar() {
     title.append(el('span', 'platform-dot'), p.name);
     const types = el('div', 'type-chips');
     types.append(chip('All types', { selected: view.type === 'any', count: counts[p.id] || 0, onClick: () => setType('any') }));
+    // Only the types you have (in any tab), so a Gemini user without the CLI sees just "Chat".
+    const have = new Set(snap.items.filter((i) => i.platform === p.id).map((i) => i.source));
     for (const t of p.types) {
+      if (!have.has(t.id) && view.type !== t.id) continue;
       types.append(chip(t.name, { selected: view.type === t.id, count: counts[`${p.id}:${t.id}`] || 0, onClick: () => setType(t.id) }));
     }
     nodes.push(back, title, types);
@@ -526,7 +541,12 @@ function buildDetail(detail, item) {
   const meta = el('div', 'detail-meta');
   const source = el('span', `label-chip platform-${about.platform}`);
   source.append(icon(TYPE_ICONS[about.source] || 'chat'), describeItem(about));
-  meta.append(source, el('span', 'label-chip', `Started ${dateText(detail.createdAt)}`), el('span', 'label-chip', `Active ${relative(detail.updatedAt)}`));
+  const fromHistoryOnly = detail.seenIn && !detail.questions.length && !detail.firstMessage;
+  meta.append(
+    source,
+    el('span', 'label-chip', `${fromHistoryOnly ? 'First opened' : 'Started'} ${dateText(detail.createdAt)}`),
+    el('span', 'label-chip', `${fromHistoryOnly ? 'Last opened' : 'Active'} ${relative(detail.updatedAt)}`),
+  );
   nodes.push(meta);
 
   if (item) {
@@ -593,8 +613,17 @@ function buildDetail(detail, item) {
       });
       nodes.push(more);
     }
+  } else if (fromHistoryOnly) {
+    const name = platformOf(about.platform).name;
+    const note = el('p', 'help');
+    note.append(`Found in your browser history (${detail.seenIn.join(', ')}). ${name} keeps the messages on its servers, so only the title and when you opened it are known here. Open it to see the chat.`);
+    if (detail.untitled) note.append(` ${name} doesn’t put chat titles in the browser tab, so it has no title here.`);
+    nodes.push(note);
   } else if (!detail.firstMessage) {
     nodes.push(el('p', 'help', 'No messages could be read for this one.'));
+  }
+  if (detail.seenIn && !fromHistoryOnly && detail.lastOpenedAt) {
+    nodes.push(el('p', 'help small', `Last opened in ${detail.seenIn.join(', ')} ${relative(detail.lastOpenedAt)}.`));
   }
   return nodes;
 }
@@ -743,8 +772,20 @@ function renderConnections() {
   }
   $('#conn-local-state').textContent = localText;
 
+  const h = c.history || { enabled: false, browsers: [], chats: 0, platforms: [], errors: [] };
+  stepMark($('#conn-history'), '2', h.enabled && h.chats > 0);
+  $('#read-history').checked = h.enabled;
+  let historyText;
+  if (!h.enabled) historyText = 'Off.';
+  else if (!c.local.scanned) historyText = 'Checking…';
+  else if (!h.browsers.length) historyText = 'No browser history found on this computer.';
+  else if (!h.chats) historyText = `Read ${h.browsers.join(', ')}: no AI chat pages found yet.`;
+  else historyText = `Found ${plural(h.chats, 'chat')} on ${h.platforms.join(', ')} in ${h.browsers.join(', ')}.`;
+  if (h.enabled && h.errors.length) historyText += ` Couldn’t read: ${h.errors.join('; ')}`;
+  $('#conn-history-state').textContent = historyText;
+
   const ext = c.extension;
-  stepMark($('#conn-web'), '2', ext.connected);
+  stepMark($('#conn-web'), '3', ext.connected);
   const state = $('#conn-web-state');
   if (!ext.listening) {
     state.textContent = ext.error ? `Can't wait for the extension: ${ext.error}` : 'Starting…';
@@ -761,7 +802,9 @@ function renderConnections() {
   const actions = [];
   if (ext.everConnected) {
     actions.push(
-      ...snap.platforms.map((p) => button(`Open ${p.websiteName}`, { iconName: 'openInNew', onClick: () => backend.openWebsite(p.id) })),
+      // The websites of the platforms you use (Claude and ChatGPT if none yet).
+      ...(usedPlatforms().length ? usedPlatforms() : snap.platforms.filter((p) => p.extension === 'full'))
+        .map((p) => button(`Open ${p.websiteName}`, { iconName: 'openInNew', onClick: () => backend.openWebsite(p.id) })),
       button('Get everything again', {
         kind: 'text',
         iconName: 'refresh',
@@ -775,6 +818,24 @@ function renderConnections() {
   actions.push(button('Open extension folder', { kind: ext.everConnected ? 'text' : 'tonal', iconName: 'folder', onClick: () => backend.openExtensionFolder() }));
   $('#conn-web-actions').replaceChildren(...actions);
   $('#conn-web-setup').hidden = ext.connected;
+}
+
+// "Your AI platforms": each platform you use, and how the app knows.
+function renderPlatformUsage() {
+  const used = usedPlatforms();
+  const rows = used.map((p) => {
+    const li = el('li', `usage platform-${p.id}`);
+    const head = el('div', 'usage-head');
+    head.append(el('span', 'platform-dot'), el('strong', null, p.name), el('span', 'usage-count', plural(p.items, 'item')));
+    li.append(head);
+    for (const sign of p.signs) li.append(el('div', 'usage-sign', sign));
+    if (!p.signs.length) li.append(el('div', 'usage-sign', 'Chats found'));
+    return li;
+  });
+  const others = snap.platforms.filter((p) => !p.used).map((p) => p.name);
+  if (!used.length) rows.push(el('li', 'help', 'None found yet. Use an AI app or website, turn on browser history below, or connect the extension.'));
+  if (others.length) rows.push(el('li', 'help small', `Not found yet: ${others.join(', ')}.`));
+  $('#platform-usage').replaceChildren(...rows);
 }
 
 function openSettings(section) {
@@ -812,6 +873,17 @@ function renderTesting() {
   const lines = [diagnosticLine('Browser extension', t.extension)];
   for (const source of t.localFields) lines.push(diagnosticLine(`${source.label} fields`, source.fields.join(', ')));
   if (!t.localFields.length) lines.push(diagnosticLine('AI apps on this computer', 'no session records read'));
+  for (const entry of t.unmatchedAddresses || []) lines.push(diagnosticLine(`${entry.platform} pages in history not recognised as chats`, entry.paths.join('  ')));
+  for (const p of t.pageProbes || []) {
+    const count = (n, one, many) => `${n || 0} ${n === 1 ? one : many}`;
+    const found = [
+      count(p.userMessages, 'message of yours', 'messages of yours'),
+      count(p.aiReplies, 'AI reply', 'AI replies'),
+      p.composer ? 'the message box' : 'no message box',
+      count(p.sidebarLinks, 'sidebar chat link', 'sidebar chat links'),
+    ];
+    lines.push(diagnosticLine(`${p.platform} page (read from the page)`, `found ${found.join(', ')}`));
+  }
   if (!t.webFields.length) lines.push(diagnosticLine('Website chat fields', 'none seen yet (open claude.ai or chatgpt.com)'));
   for (const entry of t.webFields) lines.push(diagnosticLine(`${entry.platform} website chat fields`, entry.fields.join(', ')));
   if (!t.sidebarSamples.length) lines.push(diagnosticLine('Website sidebar sample', 'none seen yet'));
@@ -927,6 +999,7 @@ function wireTesting() {
 
 function renderSettings() {
   const s = snap.settings;
+  renderPlatformUsage();
   renderConnections();
   renderTesting();
   for (const b of document.querySelectorAll('#mode-buttons button')) b.classList.toggle('selected', b.dataset.mode === s.themeMode);
@@ -999,6 +1072,7 @@ function wire() {
   });
   $('#keep-on-top').addEventListener('change', (event) => backend.updateSettings({ keepOnTop: event.target.checked }));
   $('#watch-downloads').addEventListener('change', (event) => backend.updateSettings({ watchDownloads: event.target.checked }));
+  $('#read-history').addEventListener('change', (event) => backend.updateSettings({ readHistory: event.target.checked }));
 
   // Switching between full and compact layout re-draws rows (titles only vs. two lines).
   compactQuery.addEventListener('change', () => {

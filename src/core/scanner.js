@@ -1,7 +1,8 @@
 'use strict';
 
 // Collects everything into one list: Claude chats, Cowork tasks and Code sessions, ChatGPT chats,
-// and the ChatGPT app's Work and Codex chats. Each item says which platform it's from and what type it is.
+// the ChatGPT app's Work and Codex chats, Gemini CLI sessions, and chats on any AI website found in
+// your browser history. Each source says which platform it's a sign of (see detect.js). Each item says which platform it's from and what type it is.
 // Files are only re-read when they change (same size and modified time → cached result).
 
 const fs = require('fs');
@@ -12,8 +13,16 @@ const { findRecordFiles, readRecord, findTranscriptInSessionDir } = require('./d
 const { parseTranscript, transcriptTitle } = require('./transcript');
 const { codexHome, findRolloutFiles, parseRollout, readSessionIndex, isBackgroundThread, threadKind } = require('./codex');
 const { findChatGPTApps, findStateDb, readThreads } = require('./chatgptApp');
-const { chatUrl } = require('./platforms');
+const geminiCli = require('./geminiCli');
+const { findHistoryFiles, readHistoryFile, historyChats } = require('./browserHistory');
+const { findOtherApps } = require('./detect');
+const { stampOf } = require('./sqliteCopy');
+const { platform: platformInfo, PLATFORMS } = require('./platforms');
+const { chatUrl, matchAddress } = require('./platforms');
 const { truncate } = require('./text');
+
+const HISTORY_EVERY_MS = 2 * 60 * 1000;
+const PLACEHOLDER_TITLE = /^(new chat|untitled chat)$/i; // what older versions called a chat with no title yet
 
 const DESKTOP_LABELS = {
   'local-agent-mode-sessions': 'Claude Desktop – Cowork tasks',
@@ -25,6 +34,52 @@ class Scanner {
     this.locateOptions = locateOptions;
     this.cache = new Map(); // file → { size, mtimeMs, value }
     this.threadsCache = null; // the ChatGPT app's chat list: { file, stamp, readAt, threads, error }
+    this.historyCache = new Map(); // history file → { stamp, readAt, rows, error }
+  }
+
+  // Browser history changes with every page you open, so each file is read (copied) at most every
+  // two minutes, unless you press Refresh.
+  async browserHistory(force) {
+    const files = findHistoryFiles(this.locateOptions);
+    const rows = [];
+    const sources = [];
+    const live = new Set();
+    for (const entry of files) {
+      live.add(entry.file);
+      const hit = this.historyCache.get(entry.file);
+      const stamp = await stampOf(entry.file);
+      const fresh = hit && (hit.stamp === stamp || (!force && Date.now() - hit.readAt < HISTORY_EVERY_MS));
+      let result = hit;
+      if (!fresh) {
+        try {
+          result = { stamp, readAt: Date.now(), rows: await readHistoryFile(entry, this.locateOptions), error: null };
+        } catch (err) {
+          // Keep what was read last time; try again later.
+          result = { stamp: null, readAt: Date.now(), rows: hit ? hit.rows : [], error: err.message };
+        }
+        this.historyCache.set(entry.file, result);
+      }
+      const name = entry.profile ? `${entry.browser} (${entry.profile})` : entry.browser;
+      const mine = result.rows.map((row) => ({ ...row, browser: entry.browser }));
+      rows.push(...mine);
+      const { chats, sites } = historyChats(mine);
+      sources.push({
+        label: `Browser history – ${name}`,
+        path: entry.file,
+        found: true,
+        count: chats.length,
+        errors: result.error ? 1 : 0,
+        lastError: result.error ? `Couldn’t read it (${result.error})` : undefined,
+        kind: 'history',
+        browser: entry.browser,
+        sites,
+        note: Object.keys(sites).length
+          ? `AI sites: ${Object.keys(sites).map((id) => platformInfo(id).name).join(', ')}`
+          : 'No AI chat pages in this history.',
+      });
+    }
+    for (const file of this.historyCache.keys()) if (!live.has(file)) this.historyCache.delete(file);
+    return { sources, ...historyChats(rows) };
   }
 
   // The ChatGPT app's chat list (state_5.sqlite). It's copied before reading, so it's re-read only
@@ -49,6 +104,37 @@ class Scanner {
     return this.threadsCache;
   }
 
+  async scanGemini(local, items, liveFiles) {
+    const home = geminiCli.geminiHome(this.locateOptions);
+    const source = {
+      label: 'Gemini CLI – sessions (~/.gemini/tmp)',
+      path: local ? path.join(home, 'tmp') : null,
+      found: local && geminiCli.isInstalled(this.locateOptions),
+      count: 0,
+      errors: 0,
+      local: true,
+      app: 'Gemini CLI',
+      platform: 'gemini',
+      kind: 'files',
+      note: local ? undefined : 'Turned off in Testing',
+    };
+    if (!source.found) return [source];
+    for (const { file, project } of await geminiCli.findSessionFiles(home)) {
+      try {
+        liveFiles.add(file);
+        const summary = await this.cached(file, geminiCli.parseSession);
+        if (!summary.sessionId || summary.subagent || !summary.questions.length) continue;
+        const item = geminiItem(summary, project, this.lastWrite(file));
+        items.set(item.id, item);
+        source.count++;
+      } catch (err) {
+        source.errors++;
+        source.lastError = err.message;
+      }
+    }
+    return [source];
+  }
+
   async scanCodex(local, items, liveFiles) {
     const home = codexHome(this.locateOptions);
     const apps = local ? findChatGPTApps(this.locateOptions) : [];
@@ -64,6 +150,9 @@ class Scanner {
       errors: 0,
       local: true,
       app: 'ChatGPT app',
+      platform: 'chatgpt',
+      kind: app ? 'app' : 'files',
+      unit: 'chat',
       note: off || (app
         ? 'Its Chat-mode chats are kept on OpenAI’s servers, not on this computer; they come from chatgpt.com (browser extension) or your ChatGPT export.'
         : 'The ChatGPT desktop app (the one with Chat, Work and Codex) isn’t installed.'),
@@ -76,6 +165,8 @@ class Scanner {
       errors: 0,
       local: true,
       app: 'Codex',
+      platform: 'chatgpt',
+      kind: 'files',
       note: off,
     };
     const sources = [appSource, filesSource];
@@ -87,6 +178,9 @@ class Scanner {
         count: 0,
         errors: 0,
         local: true,
+        app: 'ChatGPT Classic',
+        platform: 'chatgpt',
+        kind: 'app',
         note: 'Found. ChatGPT Classic keeps no chat files that can be read (they stay on OpenAI’s servers; on a Mac its cache is encrypted), so its chats come from chatgpt.com or your ChatGPT export.',
       });
     }
@@ -183,8 +277,9 @@ class Scanner {
     return index;
   }
 
-  // local: false skips Claude's files on this computer (a Testing panel switch).
-  async scan(importedChats = [], { local = true } = {}) {
+  // local: false skips AI apps' files on this computer (a Testing panel switch).
+  // history: false skips browser history (Settings); forceHistory re-reads it now (Refresh).
+  async scan(importedChats = [], { local = true, history = true, forceHistory = false } = {}) {
     const locations = local
       ? locateSources(this.locateOptions)
       : { desktopDirs: [], sessionRoots: [], projectsDir: null, projectsDirExists: false };
@@ -195,7 +290,7 @@ class Scanner {
     const claimed = new Set();
 
     for (const { root, name, exists } of locations.sessionRoots) {
-      const status = { label: DESKTOP_LABELS[name], path: root, found: exists, count: 0, errors: 0, local: true, app: 'Claude Desktop' };
+      const status = { label: DESKTOP_LABELS[name], path: root, found: exists, count: 0, errors: 0, local: true, app: 'Claude Desktop', platform: 'claude', kind: 'files' };
       const fields = new Set();
       sources.push(status);
       if (!exists) continue;
@@ -240,6 +335,8 @@ class Scanner {
       errors: 0,
       local: true,
       app: 'Claude Code',
+      platform: 'claude',
+      kind: 'files',
       note: local ? undefined : 'Turned off in Testing',
     };
     sources.push(terminal);
@@ -261,16 +358,92 @@ class Scanner {
     // The ChatGPT desktop app (Work and Codex chats) and the Codex CLI share ~/.codex.
     for (const source of await this.scanCodex(local, items, liveFiles)) sources.push(source);
 
+    if (locations.desktopDirs.length) {
+      sources.unshift({
+        label: 'Claude Desktop app',
+        path: locations.desktopDirs[0],
+        found: true,
+        count: 0,
+        errors: 0,
+        local: true,
+        app: 'Claude Desktop',
+        platform: 'claude',
+        kind: 'app',
+        note: 'Its Cowork and Code sessions are read from its files. Its plain chats are kept on Anthropic’s servers; they come from claude.ai (browser history or the extension) or your Claude export.',
+      });
+    }
+
+    // Gemini CLI sessions on this computer.
+    for (const source of await this.scanGemini(local, items, liveFiles)) sources.push(source);
+
+    // Other AI apps: installed, but they keep their chats on the company's servers.
+    if (local) {
+      for (const found of findOtherApps(this.locateOptions)) {
+        const site = platformInfo(found.platform);
+        sources.push({
+          label: found.name,
+          path: found.path,
+          found: true,
+          count: 0,
+          errors: 0,
+          local: true,
+          app: found.name,
+          platform: found.platform,
+          kind: 'app',
+          note: `Found. It keeps its chats on the company’s servers, not in files here; chats you open on ${site.websiteName} come from your browser history.`,
+        });
+      }
+    }
+
+    // Chats: data exports and the browser extension (importedChats), plus chat pages in browser history.
+    const chats = new Map(importedChats.map((chat) => [chat.id, { ...chat }]));
+    let historyResult = { sources: [], chats: [], sites: {}, unmatched: {} };
+    if (history) historyResult = await this.browserHistory(forceHistory);
+    for (const seen of historyResult.chats) {
+      const chat = chats.get(seen.id);
+      if (chat) {
+        // Already known from the export or the extension: add when you last opened it.
+        chat.lastOpenedAt = seen.updatedAt;
+        chat.seenIn = seen.browsers;
+        if (!chat.title || PLACEHOLDER_TITLE.test(chat.title)) chat.title = seen.title;
+        if (seen.updatedAt && (!chat.updatedAt || seen.updatedAt > chat.updatedAt)) chat.updatedAt = seen.updatedAt;
+      } else {
+        chats.set(seen.id, {
+          id: seen.id,
+          platform: seen.platform,
+          uuid: seen.uuid,
+          title: seen.title,
+          createdAt: seen.createdAt,
+          updatedAt: seen.updatedAt,
+          lastOpenedAt: seen.updatedAt,
+          historyUrl: seen.url,
+          seenIn: seen.browsers,
+          questions: [],
+          firstMessage: null,
+          lastMessage: null,
+        });
+      }
+    }
+
     const chatCounts = {};
     for (const chat of importedChats) chatCounts[chat.platform || 'claude'] = (chatCounts[chat.platform || 'claude'] || 0) + 1;
-    for (const [platformId, label] of [['claude', 'Claude chats – export and browser'], ['chatgpt', 'ChatGPT chats – export and browser']]) {
-      sources.push({ label, path: null, found: Boolean(chatCounts[platformId]), count: chatCounts[platformId] || 0, errors: 0 });
+    for (const p of PLATFORMS) {
+      // Claude and ChatGPT always (exports and the extension); the others once the extension saw them.
+      if (p.extension !== 'full' && !chatCounts[p.id]) continue;
+      const how = p.extension === 'full' ? 'export and browser extension' : 'browser extension';
+      sources.push({ label: `${p.name} chats – ${how}`, path: null, found: Boolean(chatCounts[p.id]), count: chatCounts[p.id] || 0, errors: 0, platform: p.id, kind: 'chats' });
     }
-    for (const chat of importedChats) items.set(chat.id, chatItem(chat));
+    sources.push(...historyResult.sources);
+    if (!history) sources.push({ label: 'Browser history', path: null, found: false, count: 0, errors: 0, note: 'Turned off in Settings' });
+    for (const chat of chats.values()) {
+      const item = chatItem(chat);
+      items.set(item.id, item);
+    }
 
     for (const file of this.cache.keys()) if (!liveFiles.has(file)) this.cache.delete(file);
 
-    return { items: [...items.values()], sources, locations };
+    const watchDirs = [path.join(codexHome(this.locateOptions), 'sessions'), path.join(geminiCli.geminiHome(this.locateOptions), 'tmp')];
+    return { items: [...items.values()], sources, locations: { ...locations, watchDirs: local ? watchDirs : [] }, unmatched: historyResult.unmatched };
   }
 }
 
@@ -386,20 +559,49 @@ function isDirSync(dir) {
   }
 }
 
+function geminiItem(summary, project, lastWriteAt) {
+  return {
+    id: `gemini:cli:${summary.sessionId}`,
+    platform: 'gemini',
+    source: 'cli',
+    title: summary.title || 'Untitled Gemini CLI session',
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt,
+    archived: false,
+    folder: project,
+    resumeId: summary.sessionId,
+    // Gemini CLI finds sessions by the folder they ran in, so resume from there.
+    resumeCommand: `gemini --resume ${summary.sessionId}`,
+    url: null,
+    activity: activity(summary, lastWriteAt),
+    claudeUnread: null,
+    claudeReadAt: null,
+    ...detail(summary.questions, summary.firstMessage, summary.lastMessage),
+  };
+}
+
 function chatItem(chat) {
   const platform = chat.platform || 'claude';
+  // An address from your history (it may name a second Google account, a GPT or a project) when
+  // it's one of the platform's own chat pages; otherwise the platform's usual chat address.
+  const fromHistory = chat.historyUrl && matchAddress(chat.historyUrl);
+  const url = fromHistory && fromHistory.platform === platform && fromHistory.chatId ? chat.historyUrl : chatUrl(platform, chat.uuid);
+  const name = platformInfo(platform) ? platformInfo(platform).name : platform;
   return {
     id: chat.id,
     platform,
     source: 'chat',
-    title: chat.title,
+    title: chat.title && !PLACEHOLDER_TITLE.test(chat.title) ? chat.title : `Untitled ${name} chat`,
+    untitled: !chat.title || PLACEHOLDER_TITLE.test(chat.title),
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
+    lastOpenedAt: chat.lastOpenedAt || null,
+    seenIn: chat.seenIn || null,
     archived: chat.archived === true,
     folder: null,
     resumeId: null,
     resumeCommand: null,
-    url: chatUrl(platform, chat.uuid),
+    url,
     activity: chat.activity || null, // live only when the browser extension saw it
     claudeUnread: typeof chat.claudeUnread === 'boolean' ? chat.claudeUnread : null,
     claudeReadAt: chat.claudeReadAt || null,

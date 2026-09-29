@@ -52,31 +52,48 @@
 
   <dialog id="settings" class="dialog">
     <form method="dialog">
-      <h2>Settings</h2>
+      <h2 tabindex="-1" autofocus class="dialog-title">Settings</h2>
+
+      <h3 id="platforms-heading">Your AI platforms</h3>
+      <p class="help">Found automatically from the AI apps on this computer, your browser history, the browser extension and data exports. Only these show in the platform row; the others are under <em>More</em>.</p>
+      <ul id="platform-usage" class="platform-usage"></ul>
 
       <h3 id="connections-heading">Connections</h3>
-      <p class="help">The app looks for AI apps on this computer first. For AI websites in your browser, it links to a small browser extension.</p>
+      <p class="help">The app looks for AI apps on this computer first, then for AI chat pages in your browser history. For live replies on AI websites, it links to a small browser extension.</p>
       <ol class="connections">
         <li class="connection" id="conn-local">
           <span class="conn-step">1</span>
           <div class="conn-body">
             <div class="conn-title">AI apps on this computer</div>
-            <div class="conn-sub">Claude Desktop (Cowork, Code), Claude Code, ChatGPT app (Work, Codex), Codex CLI</div>
+            <div class="conn-sub">Claude Desktop (Cowork, Code), Claude Code, ChatGPT app (Work, Codex), Codex CLI, Gemini CLI</div>
             <div class="conn-state" id="conn-local-state">Checking…</div>
           </div>
         </li>
-        <li class="connection" id="conn-web">
+        <li class="connection" id="conn-history">
           <span class="conn-step">2</span>
           <div class="conn-body">
-            <div class="conn-title">AI websites</div>
-            <div class="conn-sub">claude.ai, chatgpt.com</div>
+            <div class="conn-title">Browser history</div>
+            <div class="conn-sub">Chat pages on any AI website: titles and when you opened them. Edge, Chrome, Brave, Vivaldi, Opera, Arc, Firefox, Safari.</div>
+            <div class="conn-state" id="conn-history-state">Checking…</div>
+            <label class="switch-row">
+              <span>Read browser history (AI chat pages only)</span>
+              <input id="read-history" type="checkbox" class="switch">
+            </label>
+            <p class="help small">Only addresses on AI websites are read, nothing else from your history. Nothing leaves this computer.</p>
+          </div>
+        </li>
+        <li class="connection" id="conn-web">
+          <span class="conn-step">3</span>
+          <div class="conn-body">
+            <div class="conn-title">Live from AI websites (browser extension)</div>
+            <div class="conn-sub">Claude, ChatGPT, Gemini, Copilot, Perplexity, DeepSeek, Grok, Le Chat and Poe: chat titles, your questions, replying now and new replies</div>
             <div class="conn-state" id="conn-web-state">Checking…</div>
             <div class="conn-actions" id="conn-web-actions"></div>
             <div id="conn-web-setup">
               <ol class="steps">
                 <li><strong>Edge or Chrome:</strong> open <span class="mono">edge://extensions</span> (or <span class="mono">chrome://extensions</span>), turn on <em>Developer mode</em>, click <em>Load unpacked</em> and choose the extension folder.</li>
                 <li><strong>Firefox:</strong> open <span class="mono">about:debugging#/runtime/this-firefox</span>, click <em>Load Temporary Add-on</em> and choose <span class="mono">manifest.json</span> in the extension folder. (Firefox removes it when it restarts.)</li>
-                <li>Open claude.ai or chatgpt.com (or reload it). This turns green within a minute.</li>
+                <li>Open any AI website (or reload it). This turns green within a minute.</li>
               </ol>
               <p class="help small">The extension only reads what those tabs already loaded, and sends it to this app on your computer, nowhere else.</p>
             </div>
@@ -142,7 +159,7 @@
         <p id="testing-error" class="help error" hidden>Wrong password</p>
       </div>
       <div id="testing-open" hidden>
-        <label class="switch-row"><span>Read AI apps' files on this computer (Claude, ChatGPT app, Codex)</span><input id="t-read-local" type="checkbox" class="switch"></label>
+        <label class="switch-row"><span>Read AI apps' files on this computer (Claude, ChatGPT app, Codex, Gemini CLI)</span><input id="t-read-local" type="checkbox" class="switch"></label>
         <label class="switch-row"><span>Import the Claude export from Downloads automatically</span><input id="t-watch-downloads" type="checkbox" class="switch"></label>
         <label class="switch-row"><span>Receive chats from the browser extension</span><input id="t-read-browser" type="checkbox" class="switch"></label>
         <div class="danger-zone">

@@ -52,7 +52,7 @@ test('web chats: list and chat data give titles, dates and messages', () => {
 test('web chats: replying, new reply, and seen while watching', () => {
   const state = emptyWebState();
   applyWebEvents(state, [{ type: 'reply-started', uuid: B, at: T }], T + 1);
-  assert.equal(state.chats[`chat:${B}`].title, 'New chat');
+  assert.equal(state.chats[`chat:${B}`].title, null, 'no title yet');
   assert.equal(state.chats[`chat:${B}`].activity.pending, true);
 
   let [chat] = combineChats([], state);

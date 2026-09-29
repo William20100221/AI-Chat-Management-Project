@@ -1,8 +1,10 @@
 'use strict';
 
-// Chats seen live in your browser (claude.ai, chatgpt.com) through the browser extension.
+// Chats seen live in your browser through the browser extension, on any AI website it knows.
 // The extension sends these updates, each tagged with its platform:
-//   data            – a chat list or a chat the page loaded (titles, dates, messages)
+//   data            – a chat list or a chat the page loaded (Claude and ChatGPT: titles, dates, messages)
+//   chat-list       – the chats linked in a site's sidebar: ids and titles (the other sites)
+//   page            – the chat open in a tab: its title, your questions and the last reply shown
 //   reply-started   – you sent a message and the AI began replying (with your message)
 //   reply-finished  – the AI finished (with the start and end of the reply)
 //   viewing         – you had that chat open in a visible, focused tab
@@ -11,18 +13,18 @@
 // Chats are stored by item id, e.g. "chat:<uuid>" (Claude) or "chatgpt:chat:<id>".
 
 const { parseConversations } = require('./chatExport');
-const { chatItemId, platform: platformInfo } = require('./platforms');
+const { chatItemId, cleanTitle, platform: platformInfo } = require('./platforms');
 const { snippet } = require('./text');
 const { endsWithQuestion } = require('./transcript');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PLACEHOLDER_TITLES = new Set(['Untitled chat', 'New chat']);
-const EVENT_TYPES = new Set(['data', 'reply-started', 'reply-finished', 'viewing', 'sidebar']);
+const EVENT_TYPES = new Set(['data', 'chat-list', 'page', 'reply-started', 'reply-finished', 'viewing', 'sidebar']);
 const MAX_FIELDS = 80;
 
 function emptyWebState() {
-  // fields / sidebarSample are only for the Testing panel: what the websites' data looks like.
-  return { chats: {}, lastEventAt: null, fields: {}, sidebarSample: null };
+  // fields / sidebarSample / probes are only for the Testing panel: what the websites look like.
+  return { chats: {}, lastEventAt: null, fields: {}, sidebarSample: null, probes: {} };
 }
 
 // Older versions stored Claude chats by bare uuid and fields as one list; bring them up to date.
@@ -40,17 +42,32 @@ function normalizeWebState(state) {
   return fresh;
 }
 
-const uuidList = (value) => Array.isArray(value) && value.length <= 1000 && value.every((u) => typeof u === 'string' && UUID.test(u));
-
 function platformOf(event) {
   return platformInfo(event.platform) ? event.platform : 'claude'; // extension 0.5 and older only knew Claude
 }
 
+// Each platform's chat ids look different (UUIDs, Gemini's hex, Copilot's letters and digits).
+const validId = (platform, id) => typeof id === 'string' && platformInfo(platform).chatId.test(id);
+// Hex ids are the same chat in any letter case; others keep theirs.
+const normId = (platform, id) => (platformInfo(platform).chatId.flags.includes('i') ? id.toLowerCase() : id);
+const idList = (platform, value) => Array.isArray(value) && value.length <= 1000 && value.every((id) => validId(platform, id));
+const optionalText = (value) => value === null || value === undefined || typeof value === 'string';
+
 function isValid(event) {
   if (!event || typeof event !== 'object' || !EVENT_TYPES.has(event.type)) return false;
+  const platform = platformOf(event);
   if (event.type === 'data') return event.body !== undefined;
-  if (event.type === 'sidebar') return uuidList(event.visible) && uuidList(event.unread);
-  return typeof event.uuid === 'string' && UUID.test(event.uuid);
+  if (event.type === 'sidebar') return idList(platform, event.visible) && idList(platform, event.unread);
+  if (event.type === 'chat-list') {
+    return Array.isArray(event.chats) && event.chats.length <= 1000
+      && event.chats.every((c) => c && validId(platform, c.uuid) && optionalText(c.title));
+  }
+  if (!validId(platform, event.uuid)) return false;
+  if (event.type === 'page') {
+    return optionalText(event.title) && optionalText(event.reply)
+      && (event.questions === undefined || (Array.isArray(event.questions) && event.questions.length <= 500 && event.questions.every((q) => typeof q === 'string')));
+  }
+  return true;
 }
 
 function blankChat(platform, uuid) {
@@ -58,7 +75,7 @@ function blankChat(platform, uuid) {
     id: chatItemId(platform, uuid),
     uuid,
     platform,
-    title: 'New chat',
+    title: null,
     createdAt: null,
     updatedAt: null,
     questions: [],
@@ -91,7 +108,7 @@ function mergeLoaded(state, chat) {
 
 function markReply(state, event, at) {
   const platform = platformOf(event);
-  const uuid = event.uuid.toLowerCase();
+  const uuid = normId(platform, event.uuid);
   const id = chatItemId(platform, uuid);
   const chat = state.chats[id] || blankChat(platform, uuid);
   const previous = chat.activity || { pending: false, finishedAt: null, lastWriteAt: null };
@@ -115,11 +132,61 @@ function markReply(state, event, at) {
   state.chats[id] = chat;
 }
 
+// Your questions from the page, added to the ones already known (a long chat may show only its
+// latest messages, so nothing known is dropped).
+function mergeQuestions(known, onPage) {
+  const texts = new Set(known.map((q) => q.text));
+  const added = onPage.map((text) => snippet(text)).filter((text) => text && !texts.has(text)).map((text) => ({ role: 'user', text, at: null }));
+  return added.length ? [...known, ...added] : known;
+}
+
+// The chat open in a tab (sites read from the page): its title, questions and the last reply.
+function markPage(state, event, at) {
+  const platform = platformOf(event);
+  const uuid = normId(platform, event.uuid);
+  const id = chatItemId(platform, uuid);
+  const chat = state.chats[id] || blankChat(platform, uuid);
+  const title = cleanTitle(platform, event.title);
+  if (title) chat.title = title;
+  if (Array.isArray(event.questions) && event.questions.length) {
+    chat.questions = mergeQuestions(chat.questions, event.questions);
+    if (!chat.firstMessage) chat.firstMessage = chat.questions[0];
+  }
+  if (event.reply && event.reply.trim()) chat.lastMessage = { role: 'assistant', text: snippet(event.reply), at };
+  else if (!chat.lastMessage && chat.questions.length) chat.lastMessage = chat.questions[chat.questions.length - 1];
+  chat.updatedAt = Math.max(chat.updatedAt || 0, at); // you had it open (or it changed): like "last opened"
+  state.chats[id] = chat;
+  if (event.probe && typeof event.probe === 'object') {
+    const probe = {};
+    for (const key of ['userMessages', 'aiReplies', 'composer', 'sidebarLinks']) if (key in event.probe) probe[key] = event.probe[key];
+    state.probes = { ...(state.probes || {}), [platform]: { ...probe, at } };
+  }
+}
+
+// The chats linked in a site's sidebar: new ones are added (no dates yet), titles updated.
+function markList(state, event) {
+  const platform = platformOf(event);
+  for (const entry of event.chats) {
+    const uuid = normId(platform, entry.uuid);
+    const id = chatItemId(platform, uuid);
+    const chat = state.chats[id] || blankChat(platform, uuid);
+    const title = cleanTitle(platform, entry.title);
+    if (title) chat.title = title;
+    state.chats[id] = chat;
+  }
+  keepSample(state, platform, event.sample);
+}
+
+function keepSample(state, platform, sample) {
+  if (typeof sample !== 'string') return;
+  state.sidebarSample = { ...(state.sidebarSample && typeof state.sidebarSample === 'object' ? state.sidebarSample : {}), [platform]: sample.slice(0, 2000) };
+}
+
 // The sidebar can only prove a chat IS unread; a missing dot may just mean we can't see it.
 function markSidebar(state, event) {
   const platform = platformOf(event);
-  const unread = new Set(event.unread.map((u) => u.toLowerCase()));
-  for (const uuid of event.visible.map((u) => u.toLowerCase())) {
+  const unread = new Set(event.unread.map((u) => normId(platform, u)));
+  for (const uuid of event.visible.map((u) => normId(platform, u))) {
     const chat = state.chats[chatItemId(platform, uuid)];
     if (!chat) continue;
     if (unread.has(uuid)) {
@@ -131,9 +198,7 @@ function markSidebar(state, event) {
       chat.claudeReadAt = Date.now();
     }
   }
-  if (typeof event.sample === 'string') {
-    state.sidebarSample = { ...(state.sidebarSample && typeof state.sidebarSample === 'object' ? state.sidebarSample : {}), [platform]: event.sample.slice(0, 2000) };
-  }
+  keepSample(state, platform, event.sample);
 }
 
 // Applies updates in time order. Returns the chats you looked at: [{ id, at }].
@@ -151,9 +216,13 @@ function applyWebEvents(state, events, now = Date.now()) {
       }
       for (const chat of chats) if (UUID.test(chat.uuid) && chat.platform === platformOf(event)) mergeLoaded(state, chat);
     } else if (event.type === 'viewing') {
-      seen.push({ id: chatItemId(platformOf(event), event.uuid.toLowerCase()), at });
+      seen.push({ id: chatItemId(platformOf(event), normId(platformOf(event), event.uuid)), at });
     } else if (event.type === 'sidebar') {
       markSidebar(state, event);
+    } else if (event.type === 'chat-list') {
+      markList(state, event);
+    } else if (event.type === 'page') {
+      markPage(state, event, at);
     } else {
       markReply(state, event, at);
     }

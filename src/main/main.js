@@ -11,6 +11,7 @@ const { applyWebEvents, combineChats } = require('../core/webChats');
 const { startBridge } = require('../core/webBridge');
 const { ExtensionLink } = require('../core/extensionLink');
 const { platform: platformInfo, describePlatforms } = require('../core/platforms');
+const { platformUsage } = require('../core/detect');
 
 const RESCAN_EVERY_MS = 30 * 1000;
 const WINDOW_SIZES = {
@@ -24,6 +25,7 @@ const scanner = new Scanner();
 let items = new Map();
 let sources = [];
 let lastScanAt = null;
+let unmatchedAddresses = {}; // AI-site pages in history that didn't look like chats (Testing)
 let scanning = null;
 let scanQueued = false;
 const watchers = new Map(); // watched path → fs.FSWatcher
@@ -54,14 +56,16 @@ function snapshot() {
       asks: Boolean(item.activity && item.activity.asks),
       mark: override.pinned ? 'pinned' : override.done ? 'done' : 'auto',
       questionCount: item.questions.length,
+      untitled: Boolean(item.untitled),
     };
   });
+  const usage = platformUsage([...items.values()], sources);
   return {
     items: list,
     sources: [...sources, browserSource()].map(({ label, path: p, found, count, errors, lastError, fields, note }) => ({ label, path: p, found, count, errors, lastError, fields, note })),
     settings: store.settings,
     lastImports: store.data.lastImports,
-    platforms: describePlatforms(),
+    platforms: describePlatforms().map((p) => ({ ...p, ...usage[p.id] })),
     pendingExport: store.data.pendingExport
       ? { createdAt: store.data.pendingExport.createdAt, opened: Boolean(store.data.pendingExport.openedAt) }
       : null,
@@ -84,9 +88,12 @@ function testingSnapshot() {
     readBrowser: store.settings.readBrowser,
     watchDownloads: store.settings.watchDownloads,
     localFields: sources.filter((s) => s.fields && s.fields.length).map((s) => ({ label: s.label, fields: s.fields })),
+    unmatchedAddresses: Object.entries(unmatchedAddresses).map(([platform, paths]) => ({ platform: (platformInfo(platform) || { name: platform }).name, paths })),
     webFields: Object.entries(web.fields || {}).map(([platform, fields]) => ({ platform: (platformInfo(platform) || { name: platform }).name, fields })),
     sidebarSamples: Object.entries(web.sidebarSample && typeof web.sidebarSample === 'object' ? web.sidebarSample : {})
       .map(([platform, sample]) => ({ platform: (platformInfo(platform) || { name: platform }).name, sample })),
+    // What the extension found on the sites it reads from the page (messages, the message box…).
+    pageProbes: Object.entries(web.probes || {}).map(([platform, probe]) => ({ platform: (platformInfo(platform) || { name: platform }).name, ...probe })),
     extension: ext.everConnected ? `${ext.browser || 'browser'}, extension ${ext.version || '?'}` : 'never connected',
     stored: {
       exportChats: store.data.chats.length,
@@ -102,16 +109,26 @@ function pushSnapshot() {
 }
 
 // Runs one scan at a time; a request during a scan queues exactly one more.
-async function rescan() {
+// forceHistory: re-read browser history now (Refresh), not just every two minutes.
+let forceHistoryNext = false;
+async function rescan({ forceHistory = false } = {}) {
+  if (forceHistory) forceHistoryNext = true;
   if (scanning) {
     scanQueued = true;
     return scanning;
   }
   scanning = (async () => {
     try {
-      const result = await scanner.scan(combineChats(store.data.chats, store.data.web), { local: store.settings.readLocal });
+      const force = forceHistoryNext;
+      forceHistoryNext = false;
+      const result = await scanner.scan(combineChats(store.data.chats, store.data.web), {
+        local: store.settings.readLocal,
+        history: store.settings.readHistory,
+        forceHistory: force,
+      });
       items = new Map(result.items.map((item) => [item.id, item]));
       sources = result.sources;
+      unmatchedAddresses = result.unmatched || {};
       lastScanAt = Date.now();
       watchFolders(result.locations);
       pushSnapshot();
@@ -155,6 +172,7 @@ function watch(dir, onChange, recursive) {
 function watchFolders(locations) {
   for (const { root, exists } of locations.sessionRoots) if (exists) watch(root, rescanSoon, true);
   if (locations.projectsDirExists) watch(locations.projectsDir, rescanSoon, true);
+  for (const dir of locations.watchDirs || []) if (fs.existsSync(dir)) watch(dir, rescanSoon, true); // Codex, Gemini CLI
 }
 
 // ---- data exports (Claude and ChatGPT chat history) ----
@@ -250,13 +268,27 @@ function browserSource() {
   else if (ext.everConnected) note = `Not connected right now · last seen ${new Date(ext.lastSeenAt).toLocaleString()}`;
   else note = 'Not connected yet';
   return {
-    label: 'Websites (claude.ai, chatgpt.com) – browser extension',
+    label: 'AI websites – browser extension',
     path: null,
     found: ext.everConnected,
     count,
     errors: bridge.error ? 1 : 0,
     lastError: bridge.error,
     note,
+  };
+}
+
+// What browser history turned up: which browsers, how many chats, on which AI sites.
+function historySummary() {
+  const profiles = sources.filter((s) => s.kind === 'history');
+  const platforms = new Set();
+  for (const s of profiles) for (const id of Object.keys(s.sites || {})) platforms.add(id);
+  return {
+    enabled: store.settings.readHistory,
+    browsers: [...new Set(profiles.map((s) => s.browser))],
+    chats: [...items.values()].filter((i) => i.seenIn).length,
+    platforms: [...platforms].map((id) => (platformInfo(id) || { name: id }).name),
+    errors: profiles.filter((s) => s.errors).map((s) => `${s.label}: ${s.lastError}`),
   };
 }
 
@@ -272,6 +304,7 @@ function connections() {
       apps: [...new Set(foundLocal.map((s) => s.app).filter(Boolean))],
       scanned: lastScanAt !== null,
     },
+    history: historySummary(),
     extension: {
       listening: bridge.listening,
       error: bridge.error,
@@ -392,6 +425,9 @@ function registerIpc() {
       firstMessage: item.firstMessage,
       lastMessage: item.lastMessage,
       folder: item.folder || null,
+      lastOpenedAt: item.lastOpenedAt || null,
+      seenIn: item.seenIn || null,
+      untitled: Boolean(item.untitled),
       canOpenChat: Boolean(item.url),
       canOpenFolder: Boolean(item.folder && fs.existsSync(item.folder)),
       resumeCommand: item.resumeCommand || null,
@@ -446,6 +482,7 @@ function registerIpc() {
       scanner.cache.clear();
       rescanSoon();
     }
+    if (after.readHistory !== before.readHistory) rescan({ forceHistory: true });
     if (after.readBrowser && !before.readBrowser) link.requestResync(); // collect what waited meanwhile
     if (after.themeMode !== before.themeMode) applyTheme();
     if (after.watchDownloads !== before.watchDownloads) {
@@ -548,7 +585,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('scan:refresh', async () => {
-    await rescan();
+    await rescan({ forceHistory: true });
     checkDownloads();
   });
 

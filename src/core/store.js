@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS = {
   themeColor: 'indigo',
   compact: false,
   keepOnTop: false,
+  readHistory: true, // find AI chats in the browsers' history (AI chat pages only)
   // Testing panel switches (temporary):
   readLocal: true, // read Claude's files on this computer
   readBrowser: true, // accept chats from the browser extension
@@ -88,7 +89,7 @@ class Store {
   updateSettings(patch = {}) {
     const next = { ...this.data.settings };
     if (Number.isFinite(patch.recentDays)) next.recentDays = Math.min(365, Math.max(1, Math.round(patch.recentDays)));
-    for (const key of ['watchDownloads', 'compact', 'keepOnTop', 'readLocal', 'readBrowser']) {
+    for (const key of ['watchDownloads', 'compact', 'keepOnTop', 'readHistory', 'readLocal', 'readBrowser']) {
       if (typeof patch[key] === 'boolean') next[key] = patch[key];
     }
     if (THEME_MODES.includes(patch.themeMode)) next.themeMode = patch.themeMode;

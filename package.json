@@ -1,8 +1,8 @@
 {
   "name": "ai-chat-manager",
   "productName": "AI Chat Manager",
-  "version": "0.7.0",
-  "description": "A sticky note for your AI chats across platforms (Claude, ChatGPT): see which chats and sessions need you.",
+  "version": "0.9.0",
+  "description": "A sticky note for your AI chats across platforms: finds the AI platforms you use and shows which chats and sessions need you.",
   "private": true,
   "main": "src/main/main.js",
   "scripts": {

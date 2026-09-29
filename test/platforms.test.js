@@ -57,7 +57,7 @@ test('platforms: ids, links and what the window is told', () => {
   assert.equal(chatUrl('claude', G1), `https://claude.ai/chat/${G1}`);
   assert.equal(chatUrl('chatgpt', 'not-an-id'), null);
   const described = describePlatforms();
-  assert.deepEqual(described.map((p) => p.id), ['claude', 'chatgpt']);
+  assert.deepEqual(described.map((p) => p.id), ['claude', 'chatgpt', 'gemini', 'copilot', 'perplexity', 'deepseek', 'grok', 'mistral', 'poe']);
   assert.deepEqual(described[1].types.map((t) => t.id), ['chat', 'work', 'codex']);
 });
 
@@ -174,7 +174,7 @@ test('browser: chatgpt.com updates become ChatGPT chats, separate from Claude', 
 
   // a chatgpt.com list never turns into Claude chats, even though both are "conversations"
   applyWebEvents(state, [{ platform: 'claude', type: 'data', url: '/x', at: T, body: { items: [{ id: G2, title: 'x', create_time: '2026-09-29T08:00:00Z' }] } }], T + 9000);
-  assert.equal(state.chats[`chat:${G2}`].title, 'New chat');
+  assert.equal(state.chats[`chat:${G2}`].title, null, 'no title yet: shown as "Untitled Claude chat"');
 });
 
 test('store: each platform keeps its own export; old saved browser chats are upgraded', () => {

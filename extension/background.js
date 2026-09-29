@@ -1,9 +1,10 @@
-// Links your claude.ai and chatgpt.com tabs to the AI Chat Manager app on this computer (http://127.0.0.1:48653).
+// Links your AI website tabs (claude.ai, chatgpt.com, gemini.google.com and the others in sites.js)
+// to the AI Chat Manager app on this computer (http://127.0.0.1:48653).
 //
 // - Everything those tabs saw is delivered to the app. While the app is closed, updates
 //   wait here and are sent once it's running again.
 // - A copy of the latest data per chat is kept, so the app can ask for everything again
-//   (for example after it was reinstalled) without you reopening claude.ai.
+//   (for example after it was reinstalled) without you reopening the websites.
 // - Every minute the extension checks in with the app, so the app knows it's connected and can
 //   pass back requests.
 
@@ -26,7 +27,8 @@ function keyOf(event) {
   const site = event.platform || 'claude';
   if (event.type === 'data') return `data:${site}:${event.url}`;
   if (event.type === 'viewing') return `viewing:${site}:${event.uuid}`;
-  if (event.type === 'sidebar') return `sidebar:${site}`;
+  if (event.type === 'sidebar' || event.type === 'chat-list') return `${event.type}:${site}`;
+  if (event.type === 'page') return `page:${site}:${event.uuid}`;
   // "started" carries your message, so it keeps its own slot even if "finished" follows at once
   return `${event.type}:${site}:${event.uuid}`;
 }

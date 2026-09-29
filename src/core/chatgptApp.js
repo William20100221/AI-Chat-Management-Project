@@ -26,6 +26,7 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const { toMillis } = require('./text');
+const { withCopy, columnsOf } = require('./sqliteCopy');
 
 const STATE_DB = 'state_5.sqlite';
 
@@ -110,15 +111,6 @@ async function statOrNull(file) {
   }
 }
 
-function loadSqlite() {
-  try {
-    // Built into Node 22.5+ and Electron 33+; no extra package.
-    return require('node:sqlite');
-  } catch {
-    return null;
-  }
-}
-
 const WANTED_COLUMNS = [
   'id', 'rollout_path', 'created_at', 'updated_at', 'created_at_ms', 'updated_at_ms', 'recency_at_ms',
   'source', 'thread_source', 'originator', 'cwd', 'title', 'name', 'preview', 'first_user_message',
@@ -126,32 +118,14 @@ const WANTED_COLUMNS = [
 ];
 
 // Reads the "threads" table: the list of Work and Codex chats the ChatGPT app shows.
-//
-// The ChatGPT app keeps this database open while it runs. To never get in its way (no locks, no
-// "database is busy" for the app), we copy the file, plus its -wal file with the latest changes,
-// to a temporary folder and read the copy.
-async function readThreads(dbFile, { tmpRoot = os.tmpdir() } = {}) {
-  const sqlite = loadSqlite();
-  if (!sqlite) throw new Error('This version of the app can’t read SQLite files (needs Node 22.5 or newer)');
-  const dir = await fsp.mkdtemp(path.join(tmpRoot, 'ai-chat-manager-'));
-  const copy = path.join(dir, STATE_DB);
-  let db = null;
-  try {
-    await fsp.copyFile(dbFile, copy);
-    try {
-      await fsp.copyFile(`${dbFile}-wal`, `${copy}-wal`);
-    } catch {
-      // no recent changes waiting in a -wal file
-    }
-    db = new sqlite.DatabaseSync(copy);
-    const columns = new Set(db.prepare("SELECT name FROM pragma_table_info('threads')").all().map((row) => row.name));
+// The app keeps this database open while it runs, so a copy is read (see sqliteCopy.js).
+async function readThreads(dbFile, { tmpRoot } = {}) {
+  return withCopy(dbFile, (db) => {
+    const columns = columnsOf(db, 'threads');
     if (!columns.has('id')) throw new Error('No "threads" table in this file');
     const select = WANTED_COLUMNS.filter((c) => columns.has(c)).map((c) => `"${c}"`).join(', ');
     return db.prepare(`SELECT ${select} FROM threads`).all().map(threadFromRow).filter(Boolean);
-  } finally {
-    if (db) db.close();
-    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
+  }, { tmpRoot });
 }
 
 // Older rows keep seconds, newer ones milliseconds.

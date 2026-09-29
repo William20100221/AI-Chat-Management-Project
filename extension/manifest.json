@@ -1,24 +1,53 @@
 {
   "manifest_version": 3,
   "name": "AI Chat Manager",
-  "version": "0.7.0",
-  "description": "Shows your claude.ai and chatgpt.com chats (titles, dates, and whether the AI is replying) in the AI Chat Manager app on this computer. Nothing leaves your computer.",
-  "permissions": ["storage", "alarms"],
-  "host_permissions": ["http://127.0.0.1/*"],
+  "version": "0.9.0",
+  "description": "Shows your chats on Claude, ChatGPT, Gemini, Copilot, Perplexity and other AI sites in the AI Chat Manager app on this computer.",
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
   "background": {
     "service_worker": "background.js",
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   },
   "content_scripts": [
     {
-      "matches": ["https://claude.ai/*", "https://chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["page-hook.js"],
+      "matches": [
+        "https://claude.ai/*",
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "page-hook.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://claude.ai/*", "https://chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["relay.js"],
+      "matches": [
+        "https://claude.ai/*",
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*",
+        "https://copilot.microsoft.com/*",
+        "https://www.perplexity.ai/*",
+        "https://perplexity.ai/*",
+        "https://chat.deepseek.com/*",
+        "https://grok.com/*",
+        "https://x.com/i/grok*",
+        "https://chat.mistral.ai/*",
+        "https://poe.com/*"
+      ],
+      "js": [
+        "sites.js",
+        "relay.js"
+      ],
       "run_at": "document_start"
     }
   ],

@@ -8,7 +8,7 @@ function showStatus(status, waiting) {
   const state = $('state');
   state.classList.remove('checking', 'ok', 'paused');
   if (!status) {
-    $('state-text').textContent = 'No claude.ai or chatgpt.com activity seen yet';
+    $('state-text').textContent = 'No AI website activity seen yet';
     $('detail').textContent = '';
     return;
   }
