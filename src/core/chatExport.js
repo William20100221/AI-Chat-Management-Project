@@ -1,18 +1,21 @@
 'use strict';
 
-// Your Claude data export (claude.ai → Settings → Privacy → Export data).
+// Chat data exports, and chat data in general, for every platform:
 //
-// Two formats exist:
+// Claude (claude.ai → Settings → Privacy → Export data)
 //  - older: one zip with conversations.json inside
 //  - newer: the email gives you a small "manifest" .json listing several zips, each with a
 //    one-time download link; your chats are in conversations-000.zip (and -001, -002 … if large)
-// The exact layout inside the newer zips isn't documented, so any .json/.jsonl file is read and
-// anything that looks like a conversation (an id plus a list of messages) is used.
+//  The exact layout inside the newer zips isn't documented, so any .json/.jsonl file is read and
+//  anything that looks like a conversation (an id plus a list of messages) is used.
+// ChatGPT (chatgpt.com → Settings → Data controls → Export data)
+//  - one zip with conversations.json (message trees, see chatgpt.js)
 
 const fsp = require('fs/promises');
 const path = require('path');
 const { unzipSync, strFromU8 } = require('fflate');
 const { truncate, snippet, contentText, toMillis } = require('./text');
+const chatgpt = require('./chatgpt');
 
 const MAX_ZIP_BYTES = 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
@@ -35,7 +38,7 @@ function conversationMessages(conversation) {
 }
 
 function isConversation(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.mapping) return false;
   const id = value.uuid || value.id;
   const messages = conversationMessages(value);
   if (typeof id !== 'string' || !messages) return false;
@@ -45,11 +48,25 @@ function isConversation(value) {
 
 // A conversation without its messages: id, title and dates only.
 function isConversationMeta(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.mapping) return false;
   const id = value.uuid || value.id;
   const name = value.name ?? value.title;
   const dated = value.created_at || value.updated_at || value.createdAt || value.updatedAt;
   return typeof id === 'string' && typeof name === 'string' && Boolean(dated);
+}
+
+// Claude shows a blue dot next to chats with a reply you haven't read. If the chat data says so,
+// use it. (Field names are guesses; the Testing panel lists the fields actually seen.)
+function claudeUnreadState(conversation) {
+  let unread = null;
+  for (const key of ['is_unread', 'isUnread', 'unread', 'has_unread', 'hasUnread', 'has_unread_messages']) {
+    if (typeof conversation[key] === 'boolean') unread = conversation[key];
+  }
+  for (const key of ['unread_count', 'unreadCount', 'unread_message_count']) {
+    if (typeof conversation[key] === 'number') unread = conversation[key] > 0;
+  }
+  const readAt = toMillis(conversation.last_read_at ?? conversation.lastReadAt ?? conversation.read_at ?? conversation.last_viewed_at);
+  return { claudeUnread: unread, claudeReadAt: readAt };
 }
 
 function parseConversation(conversation) {
@@ -71,12 +88,15 @@ function parseConversation(conversation) {
   return {
     id: `chat:${uuid}`,
     uuid,
+    platform: 'claude',
     title: name || truncate(questions[0] && questions[0].text, 80) || 'Untitled chat',
     createdAt: toMillis(conversation.created_at || conversation.createdAt),
     updatedAt: Math.max(toMillis(conversation.updated_at || conversation.updatedAt) || 0, lastMessageAt) || null,
     questions,
     firstMessage: messages[0] || null,
     lastMessage: messages[messages.length - 1] || null,
+    ...claudeUnreadState(conversation),
+    fieldNames: Object.keys(conversation),
   };
 }
 
@@ -85,11 +105,11 @@ function parseConversation(conversation) {
 // conversations are collected there too.
 function collectConversations(value, found, meta = null, depth = 0) {
   if (depth > 3 || !value || typeof value !== 'object') return;
-  if (isConversation(value)) {
+  if (chatgpt.isConversation(value) || isConversation(value)) {
     found.push(value);
     return;
   }
-  if (meta && isConversationMeta(value)) {
+  if (meta && (chatgpt.isMeta(value) || isConversationMeta(value))) {
     meta.push(value);
     return;
   }
@@ -116,20 +136,27 @@ function parseDataFile(name, text) {
   return values;
 }
 
-function parseClaudeConversations(value) {
+function parseAny(conversation) {
+  return chatgpt.isConversation(conversation) || chatgpt.isMeta(conversation)
+    ? chatgpt.parseConversation(conversation)
+    : parseConversation(conversation);
+}
+
+// Every Claude or ChatGPT conversation in a piece of JSON; each chat says which platform it's from.
+function parseConversations(value) {
   const found = [];
   collectConversations(value, found);
   if (!found.length) collectConversations(value, [], found); // titles and dates only
   const chats = new Map();
   for (const conversation of found) {
-    const chat = parseConversation(conversation);
+    const chat = parseAny(conversation);
     if (chat) chats.set(chat.id, chat);
   }
   return [...chats.values()];
 }
 
-// Returns the parsed chats, or null when the zip holds no Claude conversations.
-function readClaudeExportZip(buffer) {
+// Returns the parsed chats, or null when the zip holds no Claude or ChatGPT conversations.
+function readExportZip(buffer) {
   const files = unzipSync(new Uint8Array(buffer), { filter: (file) => DATA_FILE.test(file.name) });
   const found = [];
   const meta = [];
@@ -144,7 +171,7 @@ function readClaudeExportZip(buffer) {
     for (const value of values) collectConversations(value, found, metaList);
   }
   // Full conversations when there are any; otherwise at least the titles and dates.
-  const chats = parseClaudeConversations(found.length ? found : meta);
+  const chats = parseConversations(found.length ? found : meta);
   return chats.length ? chats : null;
 }
 
@@ -179,12 +206,12 @@ async function readExportFile(filePath) {
     const value = JSON.parse(await fsp.readFile(filePath, 'utf8'));
     const manifest = parseManifest(value);
     if (manifest) return { kind: 'manifest', manifest };
-    const chats = parseClaudeConversations(value);
-    return chats.length ? { kind: 'chats', chats, part: 0 } : null;
+    const chats = parseConversations(value);
+    return chats.length ? { kind: 'chats', chats, part: 0, platform: chats[0].platform } : null;
   }
-  if (size > MAX_ZIP_BYTES) throw new Error('File is too large to be a Claude export');
-  const chats = readClaudeExportZip(await fsp.readFile(filePath));
-  return chats ? { kind: 'chats', chats, part: exportPart(name) } : null;
+  if (size > MAX_ZIP_BYTES) throw new Error('File is too large to be a chat export');
+  const chats = readExportZip(await fsp.readFile(filePath));
+  return chats ? { kind: 'chats', chats, part: exportPart(name), platform: chats[0].platform } : null;
 }
 
 // conversations-001.zip → 1; anything else → 0.
@@ -234,7 +261,7 @@ async function zipEntryNames(filePath) {
   }
 }
 
-// Cheap first check for a zip in Downloads: could it hold Claude conversations?
+// Cheap first check for a zip in Downloads: could it hold Claude or ChatGPT conversations?
 async function mightBeClaudeExport(filePath) {
   if (/^conversations-\d+/i.test(path.basename(filePath))) return true;
   const names = await zipEntryNames(filePath);
@@ -274,8 +301,8 @@ async function findCandidateFiles(downloadsDir, seen, maxAgeDays = 30) {
 }
 
 module.exports = {
-  parseClaudeConversations,
-  readClaudeExportZip,
+  parseConversations,
+  readExportZip,
   readExportFile,
   parseManifest,
   isClaudeExportUrl,

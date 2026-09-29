@@ -28,12 +28,9 @@
       <button role="tab" data-tab="all"><span data-icon="check" class="seg-check"></span>All<span class="count" data-count="all"></span></button>
       <button role="tab" data-tab="done"><span data-icon="check" class="seg-check"></span>Done<span class="count" data-count="done"></span></button>
     </div>
-    <div class="chips" id="source-chips" aria-label="Source">
-      <button data-source="any" class="selected"><span data-icon="check" class="chip-check"></span>Everything</button>
-      <button data-source="chat"><span data-icon="check" class="chip-check"></span>Chat</button>
-      <button data-source="cowork"><span data-icon="check" class="chip-check"></span>Cowork</button>
-      <button data-source="code"><span data-icon="check" class="chip-check"></span>Code</button>
-    </div>
+    <!-- Platforms: "All platforms · Claude · ChatGPT · More". Clicking one enters it: only its chats,
+         its types (e.g. Chat · Cowork · Code) and a way back. Drawn by app.js. -->
+    <div class="platform-bar" id="platform-bar" aria-label="Platforms"></div>
   </nav>
 
   <main class="layout">
@@ -58,28 +55,30 @@
       <h2>Settings</h2>
 
       <h3 id="connections-heading">Connections</h3>
-      <p class="help">The app looks for Claude on this computer first. For claude.ai in your browser, it links to a small browser extension.</p>
+      <p class="help">The app looks for AI apps on this computer first. For AI websites in your browser, it links to a small browser extension.</p>
       <ol class="connections">
         <li class="connection" id="conn-local">
           <span class="conn-step">1</span>
           <div class="conn-body">
-            <div class="conn-title">Claude on this computer</div>
+            <div class="conn-title">AI apps on this computer</div>
+            <div class="conn-sub">Claude Desktop (Cowork, Code), Claude Code, Codex</div>
             <div class="conn-state" id="conn-local-state">Checking…</div>
           </div>
         </li>
         <li class="connection" id="conn-web">
           <span class="conn-step">2</span>
           <div class="conn-body">
-            <div class="conn-title">Claude website (claude.ai)</div>
+            <div class="conn-title">AI websites</div>
+            <div class="conn-sub">claude.ai, chatgpt.com</div>
             <div class="conn-state" id="conn-web-state">Checking…</div>
             <div class="conn-actions" id="conn-web-actions"></div>
             <div id="conn-web-setup">
               <ol class="steps">
                 <li><strong>Edge or Chrome:</strong> open <span class="mono">edge://extensions</span> (or <span class="mono">chrome://extensions</span>), turn on <em>Developer mode</em>, click <em>Load unpacked</em> and choose the extension folder.</li>
                 <li><strong>Firefox:</strong> open <span class="mono">about:debugging#/runtime/this-firefox</span>, click <em>Load Temporary Add-on</em> and choose <span class="mono">manifest.json</span> in the extension folder. (Firefox removes it when it restarts.)</li>
-                <li>Open claude.ai (or reload it). This turns green within a minute.</li>
+                <li>Open claude.ai or chatgpt.com (or reload it). This turns green within a minute.</li>
               </ol>
-              <p class="help small">The extension only reads what your claude.ai tab already loaded, and sends it to this app on your computer, nowhere else.</p>
+              <p class="help small">The extension only reads what those tabs already loaded, and sends it to this app on your computer, nowhere else.</p>
             </div>
           </div>
         </li>
@@ -122,10 +121,63 @@
       </label>
 
       <h3>Chat history</h3>
-      <p class="help">For chats from before you installed the extension, use your data export: in Claude go to <strong>Settings → Privacy → Export data</strong> and download the file from the email. This app spots it in Downloads and helps you fetch your chats.</p>
+      <p class="help">For chats from before you installed the extension, use each platform's data export. Download the file from the email, and this app spots it in Downloads and imports it.</p>
+      <ul class="steps">
+        <li><strong>Claude:</strong> Settings → Privacy → Export data</li>
+        <li><strong>ChatGPT:</strong> Settings → Data controls → Export data</li>
+      </ul>
 
       <h3>Sources</h3>
       <ul id="sources" class="sources"></ul>
+
+      <!-- Testing tools: temporary, for development. Remove this block (and testing code in main.js) later. -->
+      <h3 id="testing-heading">Testing</h3>
+      <div id="testing-locked">
+        <p class="help">Tools for trying things out while the app is being built.</p>
+        <button type="button" id="testing-open-button" class="button outlined small"><span data-icon="lock"></span>Testing tools</button>
+        <div id="testing-password-row" class="unlock-row" hidden>
+          <input id="testing-password" type="password" placeholder="Password" autocomplete="off" aria-label="Testing password">
+          <button type="button" id="testing-unlock" class="button tonal small">Unlock</button>
+        </div>
+        <p id="testing-error" class="help error" hidden>Wrong password</p>
+      </div>
+      <div id="testing-open" hidden>
+        <label class="switch-row"><span>Read AI apps' files on this computer (Claude, Codex)</span><input id="t-read-local" type="checkbox" class="switch"></label>
+        <label class="switch-row"><span>Import the Claude export from Downloads automatically</span><input id="t-watch-downloads" type="checkbox" class="switch"></label>
+        <label class="switch-row"><span>Receive chats from the browser extension</span><input id="t-read-browser" type="checkbox" class="switch"></label>
+        <div class="danger-zone">
+          <div>
+            <div class="conn-title">Delete all stored data</div>
+            <p class="help small">Forgets everything this app saved: imported and browser chats, pins, done marks, what you've seen. Claude's own files are never touched. Settings and your password stay.</p>
+            <label class="check-row"><input id="t-clear-extension" type="checkbox" checked> Also clear the browser extension's saved copy</label>
+          </div>
+          <button type="button" id="t-reset" class="button danger small"><span data-icon="deleteForever"></span><span id="t-reset-label">Delete</span></button>
+        </div>
+        <p id="t-stored" class="help small"></p>
+        <div class="password-box">
+          <div class="password-head">
+            <div>
+              <div class="conn-title">Password</div>
+              <p id="t-password-state" class="help small"></p>
+            </div>
+            <div class="password-actions">
+              <button type="button" id="t-password-change" class="button tonal small">Change password</button>
+              <button type="button" id="t-password-default" class="button text small">Use default again</button>
+            </div>
+          </div>
+          <div id="t-password-form" hidden>
+            <div class="unlock-row">
+              <input id="t-password-new" type="password" placeholder="New password" autocomplete="new-password" aria-label="New password">
+              <input id="t-password-repeat" type="password" placeholder="Type it again" autocomplete="new-password" aria-label="Type the new password again">
+              <button type="button" id="t-password-save" class="button filled small">Save</button>
+            </div>
+            <p id="t-password-error" class="help error" hidden></p>
+          </div>
+        </div>
+        <div class="section-label">What the app sees in Claude's data</div>
+        <div id="t-diagnostics" class="diagnostics"></div>
+        <button type="button" id="testing-lock" class="button text small"><span data-icon="lock"></span>Lock testing tools</button>
+      </div>
 
       <div class="dialog-actions">
         <button class="button filled" value="close">Done</button>

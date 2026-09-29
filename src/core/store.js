@@ -6,7 +6,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const { emptyWebState } = require('./webChats');
+const crypto = require('crypto');
+const { emptyWebState, normalizeWebState } = require('./webChats');
+
+// Testing tools password until you set your own (Settings → Testing → Change password).
+// It's printed in the README, so it only guards against opening the tools by accident.
+const DEFAULT_TESTING_PASSWORD = 'TESTING_PASSWORD';
 
 const THEME_MODES = ['system', 'light', 'dark'];
 const THEME_COLORS = ['indigo', 'teal', 'green', 'amber', 'rose', 'violet', 'graphite'];
@@ -18,6 +23,9 @@ const DEFAULT_SETTINGS = {
   themeColor: 'indigo',
   compact: false,
   keepOnTop: false,
+  // Testing panel switches (temporary):
+  readLocal: true, // read Claude's files on this computer
+  readBrowser: true, // accept chats from the browser extension
 };
 
 function defaults() {
@@ -26,9 +34,9 @@ function defaults() {
     overrides: {}, // item id → { pinned: true } | { done: true, at }
     seen: {}, // item id → when you last looked at it
     installedAt: Date.now(), // replies finished before this count as already seen
-    chats: [], // chats from your Claude data export
-    web: emptyWebState(), // chats seen live in your claude.ai browser tab (browser extension)
-    lastImport: null, // { file, fileMtime, importedAt, count }
+    chats: [], // chats from your data exports (each says which platform it's from)
+    web: emptyWebState(), // chats seen live in your browser (browser extension)
+    lastImports: {}, // platform → { file, fileMtime, importedAt, count }
     pendingExport: null, // download links from an export manifest you haven't used yet
     seenFiles: {}, // files in Downloads we already looked at
     windowBounds: {}, // { full, compact } → { x, y, width, height }
@@ -51,9 +59,11 @@ class Store {
         ...saved,
         settings,
         seenFiles: saved.seenFiles || saved.seenZips || {},
-        web: { ...emptyWebState(), ...(saved.web || {}) },
+        web: normalizeWebState(saved.web),
+        lastImports: saved.lastImports || (saved.lastImport ? { claude: saved.lastImport } : {}),
       };
       delete this.data.seenZips;
+      delete this.data.lastImport;
     } catch {
       // first run, or an unreadable file: start fresh
     }
@@ -78,7 +88,7 @@ class Store {
   updateSettings(patch = {}) {
     const next = { ...this.data.settings };
     if (Number.isFinite(patch.recentDays)) next.recentDays = Math.min(365, Math.max(1, Math.round(patch.recentDays)));
-    for (const key of ['watchDownloads', 'compact', 'keepOnTop']) {
+    for (const key of ['watchDownloads', 'compact', 'keepOnTop', 'readLocal', 'readBrowser']) {
       if (typeof patch[key] === 'boolean') next[key] = patch[key];
     }
     if (THEME_MODES.includes(patch.themeMode)) next.themeMode = patch.themeMode;
@@ -108,17 +118,19 @@ class Store {
     this.save();
   }
 
-  // part 0 (or a single-file export) replaces your chats; later parts of the same export add to them.
-  setChats(chats, info, { merge = false } = {}) {
-    if (merge) {
-      const byId = new Map(this.data.chats.map((chat) => [chat.id, chat]));
-      for (const chat of chats) byId.set(chat.id, chat);
-      this.data.chats = [...byId.values()];
-    } else {
-      this.data.chats = chats;
-    }
-    this.data.lastImport = { ...info, count: this.data.chats.length };
+  // A platform's export replaces that platform's chats (part 0, or a single-file export);
+  // later parts of the same export add to them. Other platforms' chats are kept.
+  setChats(chats, info, { merge = false, platform = (chats[0] && chats[0].platform) || 'claude' } = {}) {
+    const mine = (chat) => (chat.platform || 'claude') === platform;
+    const byId = new Map(this.data.chats.filter((chat) => merge || !mine(chat)).map((chat) => [chat.id, chat]));
+    for (const chat of chats) byId.set(chat.id, { ...chat, platform: chat.platform || platform });
+    this.data.chats = [...byId.values()];
+    this.data.lastImports = { ...this.data.lastImports, [platform]: { ...info, count: this.data.chats.filter(mine).length } };
     this.save();
+  }
+
+  lastImport(platform) {
+    return this.data.lastImports[platform] || null;
   }
 
   setPendingExport(pending) {
@@ -131,6 +143,45 @@ class Store {
     this.save();
   }
 
+  // Testing: forget everything this app saved (never touches Claude's own files).
+  // Settings and window sizes stay.
+  resetData() {
+    const fresh = defaults();
+    this.data = {
+      ...fresh,
+      settings: this.data.settings,
+      windowBounds: this.data.windowBounds,
+      testingPassword: this.data.testingPassword, // your own password stays too
+    };
+    this.save();
+  }
+
+  // ---- Testing tools password (stored as a salted scrypt hash, never as text) ----
+
+  checkTestingPassword(password) {
+    const saved = this.data.testingPassword;
+    if (!saved || !saved.salt || !saved.hash) return String(password) === DEFAULT_TESTING_PASSWORD;
+    const hash = crypto.scryptSync(String(password), saved.salt, 32);
+    const expected = Buffer.from(saved.hash, 'hex');
+    return expected.length === hash.length && crypto.timingSafeEqual(hash, expected);
+  }
+
+  setTestingPassword(password) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(String(password), salt, 32).toString('hex');
+    this.data.testingPassword = { salt, hash };
+    this.save();
+  }
+
+  useDefaultTestingPassword() {
+    delete this.data.testingPassword;
+    this.save();
+  }
+
+  hasCustomTestingPassword() {
+    return Boolean(this.data.testingPassword && this.data.testingPassword.hash);
+  }
+
   windowBounds(mode) {
     return this.data.windowBounds[mode] || null;
   }
@@ -141,4 +192,4 @@ class Store {
   }
 }
 
-module.exports = { Store, THEME_MODES, THEME_COLORS, DEFAULT_SETTINGS };
+module.exports = { Store, THEME_MODES, THEME_COLORS, DEFAULT_SETTINGS, DEFAULT_TESTING_PASSWORD };

@@ -25,6 +25,28 @@ const NOISE_PREFIXES = [
 const INTERRUPTED = '[Request interrupted';
 const FINISHED_STOP_REASONS = new Set(['end_turn', 'stop_sequence', 'max_tokens', 'refusal']);
 
+// Tools that stop Claude until you answer: a multiple-choice question, or a plan to approve.
+const QUESTION_TOOLS = {
+  AskUserQuestion: (input) => {
+    const first = input && Array.isArray(input.questions) && input.questions[0];
+    return (first && first.question) || 'Claude has a question for you';
+  },
+  ExitPlanMode: () => 'Claude has a plan ready for your approval',
+};
+
+// A finished reply that ends with a question ("Want me to…?") is waiting for you too.
+function endsWithQuestion(text) {
+  return /\?["'”’)\]]*\s*$/.test(String(text || '').trim());
+}
+
+function questionFrom(content) {
+  if (!Array.isArray(content)) return null;
+  for (const block of content) {
+    if (block && block.type === 'tool_use' && QUESTION_TOOLS[block.name]) return QUESTION_TOOLS[block.name](block.input);
+  }
+  return null;
+}
+
 function cleanUserText(text) {
   return text
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
@@ -52,6 +74,8 @@ function emptySummary() {
     lastMessage: null,
     pending: false, // Claude has not finished the latest turn
     finishedAt: null, // when Claude last finished a reply
+    asking: null, // { text, at } while Claude waits for your answer
+    asks: false, // the last finished reply ends with a question
   };
 }
 
@@ -80,6 +104,7 @@ function applyEntry(summary, entry) {
       if (entry.isSidechain) break; // a helper agent's turn, not yours
       if (isToolResult(entry)) {
         summary.pending = true; // Claude will carry on after the tool
+        summary.asking = null; // a question tool gets its answer as a tool result
         break;
       }
       if (entry.isMeta) break;
@@ -87,6 +112,7 @@ function applyEntry(summary, entry) {
       if (!text) break;
       if (text.startsWith(INTERRUPTED)) {
         summary.pending = false;
+        summary.asking = null;
         break;
       }
       if (NOISE_PREFIXES.some((prefix) => text.startsWith(prefix))) break;
@@ -95,18 +121,25 @@ function applyEntry(summary, entry) {
       if (!summary.firstMessage) summary.firstMessage = message;
       summary.lastMessage = message;
       summary.pending = true;
+      summary.asking = null;
+      summary.asks = false;
       break;
     }
     case 'assistant': {
       if (entry.isSidechain) break;
       const stop = entry.message && entry.message.stop_reason;
+      const content = entry.message && entry.message.content;
+      const question = questionFrom(content);
+      if (question) summary.asking = { text: snippet(question, 200), at };
+      const text = contentText(content, { images: false }).trim();
       if (FINISHED_STOP_REASONS.has(stop)) {
         summary.pending = false;
+        summary.asking = null;
         summary.finishedAt = at || summary.finishedAt;
+        if (text) summary.asks = endsWithQuestion(text);
       } else {
         summary.pending = true; // calling a tool, or still streaming
       }
-      const text = contentText(entry.message && entry.message.content, { images: false }).trim();
       if (!text) break; // tool-only turns have no text
       const message = { role: 'assistant', text: snippet(text), at };
       if (!summary.firstMessage) summary.firstMessage = message;
@@ -144,4 +177,4 @@ function transcriptTitle(summary) {
   return first ? truncate(first.text, 80) : null;
 }
 
-module.exports = { parseTranscript, transcriptTitle, applyEntry, emptySummary };
+module.exports = { parseTranscript, transcriptTitle, applyEntry, emptySummary, endsWithQuestion };

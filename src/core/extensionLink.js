@@ -22,6 +22,10 @@ class ExtensionLink {
       browser: typeof client.browser === 'string' ? client.browser.slice(0, 40) : this.info.browser,
     };
     const requests = [];
+    if (this.clearWanted) {
+      requests.push('clear');
+      this.clearWanted = false;
+    }
     if (this.resyncWanted) {
       requests.push('resync');
       this.resyncWanted = false;
@@ -31,6 +35,12 @@ class ExtensionLink {
 
   requestResync() {
     this.resyncWanted = true;
+  }
+
+  // Testing: make the extension forget what it saved (so nothing comes back after a reset).
+  requestClear() {
+    this.clearWanted = true;
+    this.resyncWanted = false;
   }
 
   status(now = Date.now()) {

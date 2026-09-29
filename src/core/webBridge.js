@@ -68,6 +68,8 @@ function startBridge({ port = PORT, onEvents, onStatus = () => {} }) {
       } catch (err) {
         return reply(500, { error: err.message });
       }
+      // 423: the app is ignoring browser updates for now (Testing switch), so the extension keeps them.
+      if (answer.paused) return reply(423, { paused: true, requests: answer.requests || [] });
       return reply(200, { ok: true, received: events.length, ...answer });
     });
   });

@@ -6,10 +6,10 @@
 const backend = window.api; // "api" itself is taken: the bridge defines window.api as a global
 const icon = window.icon;
 
-const SOURCE_NAMES = { chat: 'Chat', cowork: 'Cowork', code: 'Code' };
-const WORKING = new Set(['responding', 'new-reply', 'pinned']);
-const WORKING_ORDER = { responding: 0, 'new-reply': 1, pinned: 2 };
-const WORKING_GROUPS = { responding: 'Claude is replying', 'new-reply': 'New replies', pinned: 'Pinned' };
+const TYPE_ICONS = { chat: 'chat', cowork: 'cowork', code: 'code', codex: 'code' };
+const WORKING = new Set(['asking', 'responding', 'new-reply', 'pinned']);
+const WORKING_ORDER = { asking: 0, responding: 1, 'new-reply': 2, pinned: 3 };
+const WORKING_GROUPS = { asking: 'Asking you', responding: 'Replying now', 'new-reply': 'New replies', pinned: 'Pinned' };
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -17,7 +17,9 @@ const compactQuery = window.matchMedia('(max-width: 719px)');
 
 const view = {
   tab: 'working',
-  source: 'any',
+  platform: null, // null = all platforms; otherwise you're "inside" that platform
+  type: 'any', // inside a platform: one of its types (e.g. Chat, Cowork, Code) or all
+  moreOpen: false, // the "More" platform search menu
   searchIds: null,
   selectedId: null, // full view: shown in the side panel; compact view: expanded under its row
   stickyId: null, // stays in the list after you open it, even if it no longer matches the tab
@@ -26,7 +28,8 @@ let snap = {
   items: [],
   sources: [],
   settings: { recentDays: 7, watchDownloads: true, themeMode: 'system', themeColor: 'indigo', compact: false, keepOnTop: false },
-  lastImport: null,
+  lastImports: {},
+  platforms: [],
   pendingExport: null,
   lastScanAt: null,
 };
@@ -99,10 +102,31 @@ function isCompact() {
   return compactQuery.matches;
 }
 
+// ---- platforms ----
+
+function platformOf(id) {
+  return snap.platforms.find((p) => p.id === id) || { id, name: id, types: [], websiteName: '' };
+}
+
+function typeName(item) {
+  const type = platformOf(item.platform).types.find((t) => t.id === item.source);
+  return type ? type.name : item.source;
+}
+
+// Who's doing the work: "Claude", "ChatGPT", or "Codex" for Codex sessions.
+function agentName(item) {
+  return item.source === 'codex' ? 'Codex' : platformOf(item.platform).name;
+}
+
+function describeItem(item) {
+  return `${platformOf(item.platform).name} \u00b7 ${typeName(item)}`;
+}
+
 // ---- which items show ----
 
 function matchesFilters(item) {
-  if (view.source !== 'any' && item.source !== view.source) return false;
+  if (view.platform && item.platform !== view.platform) return false;
+  if (view.platform && view.type !== 'any' && item.source !== view.type) return false;
   if (view.searchIds && !view.searchIds.has(item.id)) return false;
   return true;
 }
@@ -117,7 +141,7 @@ function inTab(item, tab) {
 function visibleItems() {
   const list = snap.items.filter((item) => matchesFilters(item) && (inTab(item, view.tab) || item.id === view.stickyId));
   if (view.tab === 'working') {
-    return list.sort((a, b) => (WORKING_ORDER[a.state] ?? 3) - (WORKING_ORDER[b.state] ?? 3) || (b.updatedAt || 0) - (a.updatedAt || 0));
+    return list.sort((a, b) => (WORKING_ORDER[a.state] ?? 4) - (WORKING_ORDER[b.state] ?? 4) || (b.updatedAt || 0) - (a.updatedAt || 0));
   }
   return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
@@ -141,7 +165,7 @@ function renderCounts() {
 function renderBanner() {
   const banner = $('#banner');
   const nodes = [];
-  const showsChats = view.source === 'any' || view.source === 'chat';
+  const showsChats = view.type === 'any' || view.type === 'chat';
   const pending = snap.pendingExport;
 
   if (pending && !pending.opened) {
@@ -160,23 +184,24 @@ function renderBanner() {
     // Step 1 found nothing on this computer, so the website (through the extension) is the way in.
     const ext = snap.connections.extension;
     const text = el('p');
+    const site = platformOf(view.platform || 'claude');
     if (ext.everConnected) {
-      text.append(el('strong', null, 'The browser extension isn’t connected. '), 'Open your browser or claude.ai and it reconnects within a minute.');
+      text.append(el('strong', null, 'The browser extension isn’t connected. '), 'Open your browser (claude.ai or chatgpt.com) and it reconnects within a minute.');
     } else {
-      text.append(el('strong', null, 'No Claude app found on this computer. '), 'Connect your browser to see your claude.ai chats here.');
+      text.append(el('strong', null, 'No AI apps found on this computer. '), 'Connect your browser to see your claude.ai and chatgpt.com chats here.');
     }
     const actions = el('div', 'banner-actions');
-    actions.append(button(ext.everConnected ? 'Open claude.ai' : 'Connect', {
+    actions.append(button(ext.everConnected ? `Open ${site.websiteName}` : 'Connect', {
       kind: 'filled',
       iconName: ext.everConnected ? 'openInNew' : undefined,
-      onClick: () => (ext.everConnected ? backend.openClaudeWebsite() : openSettings('connections')),
+      onClick: () => (ext.everConnected ? backend.openWebsite(site.id) : openSettings('connections')),
     }));
     nodes.push(text, actions);
-  } else if (showsChats && !snap.items.some((i) => i.source === 'chat') && !hintDismissed()) {
+  } else if (showsChats && !snap.items.some((i) => i.source === 'chat' && (!view.platform || i.platform === view.platform)) && !hintDismissed()) {
     const text = el('p');
     text.append(
-      el('strong', null, 'Want your claude.ai chats here too? '),
-      'Connect the browser extension to see them live, or import your data export for older ones.',
+      el('strong', null, 'Want your website chats here too? '),
+      'Connect the browser extension to see claude.ai and chatgpt.com chats live, or import your data exports for older ones.',
     );
     const actions = el('div', 'banner-actions');
     actions.append(
@@ -227,13 +252,14 @@ function renderEmpty(count) {
   empty.hidden = count > 0;
   if (count > 0) return;
   if (view.searchIds) empty.textContent = 'Nothing matches your search.';
-  else if (view.tab === 'working') empty.textContent = 'Nothing needs you right now. Chats appear here while Claude is replying, when a reply is waiting for you, or when you pin them.';
+  else if (view.tab === 'working') empty.textContent = 'Nothing needs you right now. Chats appear here when Claude asks you something, while it’s replying, when a reply is waiting for you, or when you pin them.';
   else if (view.tab === 'done') empty.textContent = 'Nothing marked as done.';
   else if (view.tab === 'recent') empty.textContent = `Nothing active in the last ${plural(snap.settings.recentDays, 'day')}.`;
   else empty.textContent = 'No chats or sessions found yet. Check Settings → Sources.';
 }
 
 function stateIndicator(item) {
+  if (item.state === 'asking') return icon('help', 'asking-icon');
   if (item.state === 'responding') return el('span', 'spinner');
   if (item.state === 'new-reply') return el('span', 'dot');
   if (item.state === 'pinned') return icon('pin');
@@ -247,16 +273,20 @@ function rowFor(item) {
   if (item.id === view.selectedId) row.classList.add('selected', isCompact() ? 'expanded' : 'selected');
   row.tabIndex = -1;
 
-  const avatar = el('span', `avatar ${item.source}`);
-  avatar.append(icon(item.source));
-  avatar.title = SOURCE_NAMES[item.source];
+  // The avatar's colour is the platform, its icon the type.
+  const avatar = el('span', `avatar platform-${item.platform}`);
+  avatar.append(icon(TYPE_ICONS[item.source] || 'chat'));
+  avatar.title = describeItem(item);
 
   const main = el('div', 'row-main');
   main.append(el('div', 'row-title', item.title));
   const support = el('div', 'row-support');
-  if (item.state === 'responding') support.append(el('span', 'live', 'Claude is replying…'));
-  else if (item.state === 'new-reply') support.append(el('span', 'live', 'New reply'));
-  else support.append(el('span', null, SOURCE_NAMES[item.source]));
+  const where = view.platform ? typeName(item) : describeItem(item);
+  if (item.state === 'asking') support.append(el('span', 'live', item.question ? `Asks: ${item.question}` : `${agentName(item)} is asking you`));
+  else if (item.state === 'responding') support.append(el('span', 'live', `${agentName(item)} is replying…`));
+  else if (item.state === 'new-reply') support.append(el('span', 'live', item.asks ? 'New reply · asks you something' : 'New reply'));
+  else support.append(el('span', null, where));
+  if (item.state === 'asking' || item.state === 'responding' || item.state === 'new-reply') support.append(el('span', null, `· ${where}`));
   if (item.questionCount) support.append(el('span', null, `· ${plural(item.questionCount, 'question')}`));
   main.append(support);
 
@@ -293,24 +323,161 @@ function renderList() {
 }
 
 function renderStatus() {
-  const bySource = { chat: 0, cowork: 0, code: 0 };
-  for (const item of snap.items) bySource[item.source]++;
   const replying = snap.items.filter((i) => i.state === 'responding').length;
+  const asking = snap.items.filter((i) => i.state === 'asking').length;
   const parts = [];
+  if (asking) parts.push(`${asking} asking you`);
   if (replying) parts.push(`${replying} replying now`);
-  parts.push(plural(bySource.cowork, 'Cowork task'), plural(bySource.code, 'Code session'));
-  if (bySource.chat) {
-    const from = snap.lastImport ? `export ${dateText(snap.lastImport.fileMtime || snap.lastImport.importedAt)} + browser` : 'from your browser';
-    parts.push(`${plural(bySource.chat, 'chat')} (${from})`);
-  } else {
-    parts.push('no chats yet');
+  for (const p of snap.platforms) {
+    const count = snap.items.filter((i) => i.platform === p.id).length;
+    parts.push(`${p.name} ${count}`);
   }
   const ext = snap.connections && snap.connections.extension;
-  if (ext && ext.connected) parts.push(`claude.ai linked (${ext.browser || 'browser'})`);
+  if (ext && ext.connected) parts.push(`websites linked (${ext.browser || 'browser'})`);
   $('#status-text').textContent = parts.join('  ·  ');
 }
 
+// ---- the platform row: All platforms · Claude · ChatGPT · More, or inside one platform ----
+
+// How many items each platform and type has in the current tab (and search).
+function platformCounts() {
+  const counts = { all: 0 };
+  for (const item of snap.items) {
+    if (view.searchIds && !view.searchIds.has(item.id)) continue;
+    if (!inTab(item, view.tab)) continue;
+    counts.all++;
+    counts[item.platform] = (counts[item.platform] || 0) + 1;
+    counts[`${item.platform}:${item.source}`] = (counts[`${item.platform}:${item.source}`] || 0) + 1;
+  }
+  return counts;
+}
+
+function chip(label, { selected = false, count, className = '', onClick } = {}) {
+  const node = el('button', `chip${selected ? ' selected' : ''}${className ? ` ${className}` : ''}`);
+  node.type = 'button';
+  if (selected) node.append(icon('check', 'chip-check-icon'));
+  node.append(label);
+  if (count !== undefined) node.append(el('span', 'count', String(count)));
+  if (onClick) node.addEventListener('click', onClick);
+  return node;
+}
+
+function enterPlatform(id) {
+  view.platform = id;
+  view.type = 'any';
+  view.moreOpen = false;
+  view.stickyId = null;
+  renderPlatformBar();
+  render();
+}
+
+function leavePlatform() {
+  view.platform = null;
+  view.type = 'any';
+  view.stickyId = null;
+  renderPlatformBar();
+  render();
+}
+
+function setType(type) {
+  view.type = type;
+  view.stickyId = null;
+  renderPlatformBar();
+  render();
+}
+
+function closeMore() {
+  if (!view.moreOpen) return;
+  view.moreOpen = false;
+  renderPlatformBar();
+}
+
+// "More": search for a platform by name (useful once there are many).
+function platformMenu(counts) {
+  const menu = el('div', 'platform-menu');
+  menu.addEventListener('click', (event) => event.stopPropagation());
+  const input = el('input');
+  input.id = 'platform-search';
+  input.type = 'search';
+  input.placeholder = 'Find a platform';
+  input.autocomplete = 'off';
+  const list = el('ul', 'platform-list');
+  const fill = () => {
+    const query = input.value.trim().toLowerCase();
+    const matches = snap.platforms.filter((p) => p.name.toLowerCase().includes(query) || p.id.includes(query));
+    list.replaceChildren(...(matches.length
+      ? matches.map((p) => {
+        const li = el('li');
+        const option = el('button', `platform-option platform-${p.id}`);
+        option.type = 'button';
+        option.append(el('span', 'platform-dot'), el('span', 'option-name', p.name), el('span', 'count', String(counts[p.id] || 0)));
+        option.addEventListener('click', () => enterPlatform(p.id));
+        li.append(option);
+        return li;
+      })
+      : [el('li', 'help small', 'No platform with that name yet.')]));
+  };
+  input.addEventListener('input', fill);
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      const first = list.querySelector('button');
+      if (first) first.click();
+    } else if (event.key === 'Escape') {
+      closeMore();
+    }
+  });
+  fill();
+  menu.append(input, list);
+  return menu;
+}
+
+function renderPlatformBar() {
+  const bar = $('#platform-bar');
+  const counts = platformCounts();
+  const nodes = [];
+  if (!view.platform) {
+    nodes.push(chip('All platforms', { selected: true, count: counts.all }));
+    for (const p of snap.platforms) {
+      const node = chip(p.name, { count: counts[p.id] || 0, className: `platform-chip platform-${p.id}`, onClick: () => enterPlatform(p.id) });
+      node.prepend(el('span', 'platform-dot'));
+      node.append(icon('chevronRight', 'enter-icon'));
+      node.title = `Show only ${p.name}`;
+      nodes.push(node);
+    }
+    const more = el('div', 'more');
+    const moreButton = chip('More', { className: 'more-button' });
+    moreButton.prepend(icon('search'));
+    moreButton.setAttribute('aria-expanded', String(view.moreOpen));
+    moreButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      view.moreOpen = !view.moreOpen;
+      renderPlatformBar();
+      if (view.moreOpen) $('#platform-search').focus();
+    });
+    more.append(moreButton);
+    if (view.moreOpen) more.append(platformMenu(counts));
+    nodes.push(more);
+  } else {
+    const p = platformOf(view.platform);
+    const back = el('button', 'back-button');
+    back.type = 'button';
+    back.append(icon('arrowBack'), 'All platforms');
+    back.addEventListener('click', leavePlatform);
+    const title = el('span', `platform-title platform-${p.id}`);
+    title.append(el('span', 'platform-dot'), p.name);
+    const types = el('div', 'type-chips');
+    types.append(chip('All types', { selected: view.type === 'any', count: counts[p.id] || 0, onClick: () => setType('any') }));
+    for (const t of p.types) {
+      types.append(chip(t.name, { selected: view.type === t.id, count: counts[`${p.id}:${t.id}`] || 0, onClick: () => setType(t.id) }));
+    }
+    nodes.push(back, title, types);
+  }
+  bar.replaceChildren(...nodes);
+  bar.dataset.level = view.platform ? 'platform' : 'all';
+}
+
 function render() {
+  if (!view.moreOpen) renderPlatformBar(); // don't rebuild the menu while you type in it
   renderCounts();
   renderBanner();
   renderListTools();
@@ -320,9 +487,9 @@ function render() {
 
 // ---- rendering: details ----
 
-function messageBox(label, message) {
+function messageBox(label, message, agent) {
   const box = el('div', 'message');
-  const who = message.role === 'user' ? 'You' : 'Claude';
+  const who = message.role === 'user' ? 'You' : agent;
   box.append(el('span', 'who', `${who} · ${label}${message.at ? ` · ${dateTimeText(message.at)}` : ''}`));
   box.append(document.createTextNode(message.text));
   return box;
@@ -330,18 +497,21 @@ function messageBox(label, message) {
 
 function stateCard(item) {
   const card = el('div', 'state-card');
-  if (item.state === 'responding') {
+  if (item.state === 'asking') {
     card.classList.add('live');
-    card.append(el('span', 'spinner'), 'Claude is replying right now');
+    card.append(icon('help'), el('span', null, item.question ? `${agentName(item)} is waiting for your answer: ${item.question}` : `${agentName(item)} is waiting for your answer`));
+  } else if (item.state === 'responding') {
+    card.classList.add('live');
+    card.append(el('span', 'spinner'), `${agentName(item)} is replying right now`);
   } else if (item.state === 'new-reply') {
     card.classList.add('live');
-    card.append(el('span', 'dot'), 'New reply you haven’t looked at');
+    card.append(el('span', 'dot'), item.asks ? 'New reply that asks you something' : 'New reply you haven’t looked at');
   } else if (item.mark === 'pinned') {
     card.append(icon('pin'), 'Pinned: stays in Working until you unpin it');
   } else if (item.mark === 'done') {
     card.append(icon('taskAlt'), 'Marked done: comes back if something new happens');
   } else if (item.state === 'done') {
-    card.append(icon('taskAlt'), 'Archived in Claude');
+    card.append(icon('taskAlt'), `Archived in ${platformOf(item.platform).name}`);
   } else {
     return null;
   }
@@ -350,10 +520,12 @@ function stateCard(item) {
 
 function buildDetail(detail, item) {
   const nodes = [el('h2', 'detail-title', detail.title)];
+  const about = item || { platform: detail.platform, source: detail.source };
+  const agent = agentName(about);
 
   const meta = el('div', 'detail-meta');
-  const source = el('span', `label-chip ${detail.source}`);
-  source.append(icon(detail.source), SOURCE_NAMES[detail.source]);
+  const source = el('span', `label-chip platform-${about.platform}`);
+  source.append(icon(TYPE_ICONS[about.source] || 'chat'), describeItem(about));
   meta.append(source, el('span', 'label-chip', `Started ${dateText(detail.createdAt)}`), el('span', 'label-chip', `Active ${relative(detail.updatedAt)}`));
   nodes.push(meta);
 
@@ -368,7 +540,7 @@ function buildDetail(detail, item) {
       button(pinned ? 'Unpin' : 'Pin', { iconName: 'pin', kind: pinned ? 'active' : 'tonal', onClick: () => backend.mark(item.id, pinned ? 'auto' : 'pinned') }),
       button(done ? 'Not done' : 'Done', { iconName: 'taskAlt', kind: done ? 'active' : 'tonal', onClick: () => backend.mark(item.id, done ? 'auto' : 'done') }),
     );
-    if (detail.canOpenChat) actions.append(button('Open in Claude', { iconName: 'openInNew', kind: 'outlined', onClick: () => backend.openChat(detail.id) }));
+    if (detail.canOpenChat) actions.append(button(`Open in ${platformOf(about.platform).name}`, { iconName: 'openInNew', kind: 'outlined', onClick: () => backend.openChat(detail.id) }));
     if (detail.canOpenFolder) actions.append(button('Folder', { iconName: 'folder', kind: 'outlined', onClick: () => backend.openFolder(detail.id) }));
     if (detail.resumeCommand) {
       actions.append(button('Copy resume command', {
@@ -385,10 +557,10 @@ function buildDetail(detail, item) {
 
   if (detail.folder && !isCompact()) nodes.push(el('div', 'section-label', 'Folder'), el('div', 'mono', detail.folder));
 
-  if (detail.firstMessage) nodes.push(el('div', 'section-label', 'First message'), messageBox('first', detail.firstMessage));
+  if (detail.firstMessage) nodes.push(el('div', 'section-label', 'First message'), messageBox('first', detail.firstMessage, agent));
   const last = detail.lastMessage;
   const sameAsFirst = last && detail.firstMessage && last.text === detail.firstMessage.text && last.at === detail.firstMessage.at;
-  if (last && !sameAsFirst) nodes.push(el('div', 'section-label', 'Last message'), messageBox('latest', last));
+  if (last && !sameAsFirst) nodes.push(el('div', 'section-label', 'Last message'), messageBox('latest', last, agent));
 
   if (detail.questions.length) {
     nodes.push(el('div', 'section-label', `Your questions (${detail.questions.length})`));
@@ -482,6 +654,7 @@ function applySnapshot(next) {
   }
   // You're looking at it, so a reply that finishes while it's open counts as seen.
   if (selected && selected.state === 'new-reply' && document.hasFocus()) backend.markSeen([selected.id]);
+  if (!view.moreOpen) renderPlatformBar();
   renderCounts();
   renderBanner();
   renderListTools();
@@ -554,8 +727,8 @@ function renderConnections() {
   let localText = 'Checking…';
   if (c.local.scanned) {
     localText = c.local.found
-      ? `Found · ${plural(c.local.items, 'Cowork task or Code session')}, updating live`
-      : 'Not found. That’s fine: connect claude.ai below instead.';
+      ? `Found · ${plural(c.local.items, 'session')}, updating live`
+      : 'Not found. That’s fine: connect the AI websites below instead.';
   }
   $('#conn-local-state').textContent = localText;
 
@@ -577,7 +750,7 @@ function renderConnections() {
   const actions = [];
   if (ext.everConnected) {
     actions.push(
-      button('Open claude.ai', { iconName: 'openInNew', onClick: () => backend.openClaudeWebsite() }),
+      ...snap.platforms.map((p) => button(`Open ${p.websiteName}`, { iconName: 'openInNew', onClick: () => backend.openWebsite(p.id) })),
       button('Get everything again', {
         kind: 'text',
         iconName: 'refresh',
@@ -600,9 +773,151 @@ function openSettings(section) {
   if (section === 'connections') $('#connections-heading').scrollIntoView({ block: 'start' });
 }
 
+// ---- Testing tools (temporary) ----
+
+function diagnosticLine(label, value) {
+  const line = el('div');
+  line.append(el('strong', null, `${label}: `), value);
+  return line;
+}
+
+function renderTesting() {
+  const t = snap.testing || { unlocked: false };
+  $('#testing-locked').hidden = t.unlocked;
+  $('#testing-open').hidden = !t.unlocked;
+  if (!t.unlocked) return;
+
+  $('#t-password-state').textContent = t.customPassword
+    ? 'Using your own password.'
+    : 'Using the default password (it\u2019s in the README, so anyone who reads it knows it).';
+  $('#t-password-default').hidden = !t.customPassword;
+
+  $('#t-read-local').checked = t.readLocal;
+  $('#t-watch-downloads').checked = t.watchDownloads;
+  $('#t-read-browser').checked = t.readBrowser;
+  const s = t.stored;
+  $('#t-stored').textContent = `Stored now: ${plural(s.exportChats, 'chat')} from the export, ${plural(s.browserChats, 'chat')} from the browser, ${plural(s.marks, 'pin/done mark')}, ${plural(s.seen, 'seen mark')}.`;
+
+  const lines = [diagnosticLine('Browser extension', t.extension)];
+  for (const source of t.localFields) lines.push(diagnosticLine(`${source.label} fields`, source.fields.join(', ')));
+  if (!t.localFields.length) lines.push(diagnosticLine('AI apps on this computer', 'no session records read'));
+  if (!t.webFields.length) lines.push(diagnosticLine('Website chat fields', 'none seen yet (open claude.ai or chatgpt.com)'));
+  for (const entry of t.webFields) lines.push(diagnosticLine(`${entry.platform} website chat fields`, entry.fields.join(', ')));
+  if (!t.sidebarSamples.length) lines.push(diagnosticLine('Website sidebar sample', 'none seen yet'));
+  for (const entry of t.sidebarSamples) {
+    const sample = el('div');
+    sample.append(el('strong', null, `${entry.platform} sidebar sample (text removed): `), el('pre', null, entry.sample));
+    lines.push(sample);
+  }
+  $('#t-diagnostics').replaceChildren(...lines);
+}
+
+let resetConfirmTimer = null;
+function wireTesting() {
+  $('#testing-open-button').addEventListener('click', () => {
+    $('#testing-password-row').hidden = false;
+    $('#testing-password').focus();
+  });
+  const unlock = async () => {
+    const input = $('#testing-password');
+    const ok = await backend.unlockTesting(input.value);
+    input.value = '';
+    $('#testing-error').hidden = ok;
+    if (!ok) {
+      const row = $('#testing-password-row');
+      row.classList.remove('shake');
+      void row.offsetWidth; // restart the animation
+      row.classList.add('shake');
+      input.focus();
+    }
+  };
+  $('#testing-unlock').addEventListener('click', unlock);
+  $('#testing-password').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault(); // don't close the dialog
+      unlock();
+    }
+  });
+  $('#testing-lock').addEventListener('click', () => {
+    $('#testing-password-row').hidden = true;
+    $('#t-password-form').hidden = true;
+    backend.lockTesting();
+  });
+
+  // Change password: type it twice, then Save (or press Enter).
+  const passwordError = (text) => {
+    $('#t-password-error').textContent = text || '';
+    $('#t-password-error').hidden = !text;
+  };
+  $('#t-password-change').addEventListener('click', () => {
+    const form = $('#t-password-form');
+    form.hidden = !form.hidden;
+    passwordError('');
+    if (!form.hidden) $('#t-password-new').focus();
+  });
+  const savePassword = async () => {
+    const first = $('#t-password-new').value;
+    const second = $('#t-password-repeat').value;
+    if (first !== second) return passwordError('The two passwords don\u2019t match.');
+    const result = await backend.setTestingPassword(first);
+    if (!result.ok) return passwordError(result.error);
+    $('#t-password-new').value = '';
+    $('#t-password-repeat').value = '';
+    $('#t-password-form').hidden = true;
+    passwordError('');
+    snackbar('Testing password changed. Use it next time you unlock.');
+    return undefined;
+  };
+  $('#t-password-save').addEventListener('click', savePassword);
+  for (const id of ['#t-password-new', '#t-password-repeat']) {
+    $(id).addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault(); // don't close the dialog
+        savePassword();
+      }
+    });
+  }
+  $('#t-password-default').addEventListener('click', async () => {
+    await backend.useDefaultTestingPassword();
+    snackbar('Testing password is back to the default.');
+  });
+  $('#t-read-local').addEventListener('change', (event) => backend.updateSettings({ readLocal: event.target.checked }));
+  $('#t-watch-downloads').addEventListener('change', (event) => backend.updateSettings({ watchDownloads: event.target.checked }));
+  $('#t-read-browser').addEventListener('change', (event) => backend.updateSettings({ readBrowser: event.target.checked }));
+
+  // Two clicks to delete: the first arms the button for a few seconds.
+  $('#t-reset').addEventListener('click', async () => {
+    const buttonEl = $('#t-reset');
+    if (!buttonEl.classList.contains('confirm')) {
+      buttonEl.classList.add('confirm');
+      $('#t-reset-label').textContent = 'Click again to delete';
+      clearTimeout(resetConfirmTimer);
+      resetConfirmTimer = setTimeout(() => {
+        buttonEl.classList.remove('confirm');
+        $('#t-reset-label').textContent = 'Delete';
+      }, 4000);
+      return;
+    }
+    clearTimeout(resetConfirmTimer);
+    buttonEl.classList.remove('confirm');
+    $('#t-reset-label').textContent = 'Deleting…';
+    buttonEl.disabled = true;
+    try {
+      await backend.resetData({ alsoExtension: $('#t-clear-extension').checked });
+      view.selectedId = null;
+      view.stickyId = null;
+      clearDetail();
+    } finally {
+      buttonEl.disabled = false;
+      $('#t-reset-label').textContent = 'Delete';
+    }
+  });
+}
+
 function renderSettings() {
   const s = snap.settings;
   renderConnections();
+  renderTesting();
   for (const b of document.querySelectorAll('#mode-buttons button')) b.classList.toggle('selected', b.dataset.mode === s.themeMode);
   for (const b of document.querySelectorAll('#color-swatches button')) b.classList.toggle('selected', b.dataset.color === s.themeColor);
   $('#recent-days').value = s.recentDays;
@@ -629,14 +944,7 @@ function wire() {
     });
   }
 
-  for (const chip of document.querySelectorAll('#source-chips button')) {
-    chip.addEventListener('click', () => {
-      view.source = chip.dataset.source;
-      view.stickyId = null;
-      for (const b of document.querySelectorAll('#source-chips button')) b.classList.toggle('selected', b === chip);
-      render();
-    });
-  }
+  document.addEventListener('click', closeMore); // clicking anywhere else closes "More"
 
   let searchTimer = null;
   $('#search').addEventListener('input', (event) => {
@@ -666,6 +974,7 @@ function wire() {
   $('#toggle-compact').addEventListener('click', () => backend.updateSettings({ compact: !snap.settings.compact }));
 
   $('#open-settings').addEventListener('click', () => openSettings());
+  wireTesting();
 
   for (const b of document.querySelectorAll('#mode-buttons button')) {
     b.addEventListener('click', () => backend.updateSettings({ themeMode: b.dataset.mode }));
@@ -688,6 +997,11 @@ function wire() {
 
   document.addEventListener('keydown', (event) => {
     if (event.target.closest('input, dialog')) return;
+    if (event.key === 'Escape') {
+      if (view.moreOpen) closeMore();
+      else if (view.platform) leavePlatform(); // Esc goes back to all platforms
+      return;
+    }
     if (event.key === '/') {
       event.preventDefault();
       $('#search').focus();

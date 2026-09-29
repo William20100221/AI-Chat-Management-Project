@@ -10,6 +10,7 @@ const { readExportFile, findCandidateFiles, mightBeClaudeExport } = require('../
 const { applyWebEvents, combineChats } = require('../core/webChats');
 const { startBridge } = require('../core/webBridge');
 const { ExtensionLink } = require('../core/extensionLink');
+const { platform: platformInfo, describePlatforms } = require('../core/platforms');
 
 const RESCAN_EVERY_MS = 30 * 1000;
 const WINDOW_SIZES = {
@@ -29,6 +30,8 @@ const watchers = new Map(); // watched path → fs.FSWatcher
 let downloadsWatcher = null;
 let bridge = { listening: false, error: null };
 let link = null; // the browser extension: connected or not, and what we want from it
+let testingUnlocked = false; // Testing panel (temporary, for development); password lives in the store
+const TESTING_SETTINGS = ['readLocal', 'readBrowser'];
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -41,11 +44,14 @@ function snapshot() {
     const override = store.override(item.id);
     return {
       id: item.id,
+      platform: item.platform || 'claude',
       source: item.source,
       title: item.title,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
-      state: itemState(item, { override, seenAt: store.seenAt(item.id), recentDays, now }),
+      state: itemState(item, { override, seenAt: store.seenAt(item.id), openedAt: store.data.seen[item.id] || 0, recentDays, now }),
+      question: item.activity && item.activity.asking ? item.activity.asking.text : null,
+      asks: Boolean(item.activity && item.activity.asks),
       mark: override.pinned ? 'pinned' : override.done ? 'done' : 'auto',
       questionCount: item.questions.length,
     };
@@ -54,12 +60,40 @@ function snapshot() {
     items: list,
     sources: [...sources, browserSource()].map(({ label, path: p, found, count, errors, lastError, fields, note }) => ({ label, path: p, found, count, errors, lastError, fields, note })),
     settings: store.settings,
-    lastImport: store.data.lastImport,
+    lastImports: store.data.lastImports,
+    platforms: describePlatforms(),
     pendingExport: store.data.pendingExport
       ? { createdAt: store.data.pendingExport.createdAt, opened: Boolean(store.data.pendingExport.openedAt) }
       : null,
     lastScanAt,
     connections: connections(),
+    testing: testingSnapshot(),
+  };
+}
+
+// What the Testing panel shows: its switches, plus what the app sees in Claude's data,
+// so field names can be checked against the real thing.
+function testingSnapshot() {
+  if (!testingUnlocked) return { unlocked: false };
+  const web = store.data.web;
+  const ext = link.status();
+  return {
+    unlocked: true,
+    customPassword: store.hasCustomTestingPassword(),
+    readLocal: store.settings.readLocal,
+    readBrowser: store.settings.readBrowser,
+    watchDownloads: store.settings.watchDownloads,
+    localFields: sources.filter((s) => s.fields && s.fields.length).map((s) => ({ label: s.label, fields: s.fields })),
+    webFields: Object.entries(web.fields || {}).map(([platform, fields]) => ({ platform: (platformInfo(platform) || { name: platform }).name, fields })),
+    sidebarSamples: Object.entries(web.sidebarSample && typeof web.sidebarSample === 'object' ? web.sidebarSample : {})
+      .map(([platform, sample]) => ({ platform: (platformInfo(platform) || { name: platform }).name, sample })),
+    extension: ext.everConnected ? `${ext.browser || 'browser'}, extension ${ext.version || '?'}` : 'never connected',
+    stored: {
+      exportChats: store.data.chats.length,
+      browserChats: Object.keys(web.chats).length,
+      marks: Object.keys(store.data.overrides).length,
+      seen: Object.keys(store.data.seen).length,
+    },
   };
 }
 
@@ -75,7 +109,7 @@ async function rescan() {
   }
   scanning = (async () => {
     try {
-      const result = await scanner.scan(combineChats(store.data.chats, store.data.web));
+      const result = await scanner.scan(combineChats(store.data.chats, store.data.web), { local: store.settings.readLocal });
       items = new Map(result.items.map((item) => [item.id, item]));
       sources = result.sources;
       lastScanAt = Date.now();
@@ -123,14 +157,16 @@ function watchFolders(locations) {
   if (locations.projectsDirExists) watch(locations.projectsDir, rescanSoon, true);
 }
 
-// ---- Claude data export (for normal chats) ----
+// ---- data exports (Claude and ChatGPT chat history) ----
 
 async function importChats(result, file, fileMtime) {
   const merge = result.part > 0;
-  store.setChats(result.chats, { file: path.basename(file), fileMtime, importedAt: Date.now() }, { merge });
-  if (store.data.pendingExport) store.setPendingExport(null);
+  const platform = result.platform || 'claude';
+  store.setChats(result.chats, { file: path.basename(file), fileMtime, importedAt: Date.now() }, { merge, platform });
+  if (platform === 'claude' && store.data.pendingExport) store.setPendingExport(null);
   await rescan();
-  send('notice', { kind: 'ok', text: `Imported ${result.chats.length} chats from ${path.basename(file)}` });
+  const name = (platformInfo(platform) || { name: platform }).name;
+  send('notice', { kind: 'ok', text: `Imported ${result.chats.length} ${name} chats from ${path.basename(file)}` });
 }
 
 function rememberManifest(manifest) {
@@ -166,7 +202,7 @@ async function checkDownloads() {
         if (result.kind === 'manifest') {
           rememberManifest(result.manifest);
         } else {
-          const last = store.data.lastImport;
+          const last = store.lastImport(result.platform || 'claude');
           const newer = !last || candidate.mtimeMs > (last.fileMtime || 0);
           if (result.part > 0 || newer) await importChats(result, candidate.file, candidate.mtimeMs);
         }
@@ -214,7 +250,7 @@ function browserSource() {
   else if (ext.everConnected) note = `Not connected right now · last seen ${new Date(ext.lastSeenAt).toLocaleString()}`;
   else note = 'Not connected yet';
   return {
-    label: 'Claude in your browser – extension',
+    label: 'Websites (claude.ai, chatgpt.com) – browser extension',
     path: null,
     found: ext.everConnected,
     count,
@@ -224,9 +260,9 @@ function browserSource() {
   };
 }
 
-// Where Claude was found: on this computer first, then the website through the extension.
+// Where AI chats were found: apps on this computer first, then websites through the extension.
 function connections() {
-  const local = sources.filter((s) => s.path && s.label.startsWith('Claude'));
+  const local = sources.filter((s) => s.local && s.path);
   const foundLocal = local.filter((s) => s.found);
   const ext = link.status();
   return {
@@ -251,6 +287,11 @@ function onBrowserEvents(events, { client }) {
   const wasConnected = link.status().connected;
   const answer = link.contact(client);
   store.data.web.extension = link.info;
+  if (!store.settings.readBrowser) {
+    // Testing switch is off: note the check-in, but leave the updates waiting in the extension.
+    if (!wasConnected) pushSnapshot();
+    return { ...answer, paused: true };
+  }
   const { seen } = applyWebEvents(store.data.web, events);
   for (const { id, at } of seen) store.data.seen[id] = Math.max(store.data.seen[id] || 0, at);
   store.save();
@@ -341,6 +382,7 @@ function registerIpc() {
     const item = requireItem(id);
     return {
       id: item.id,
+      platform: item.platform || 'claude',
       source: item.source,
       title: item.title,
       createdAt: item.createdAt,
@@ -351,7 +393,7 @@ function registerIpc() {
       folder: item.folder || null,
       canOpenChat: Boolean(item.url),
       canOpenFolder: Boolean(item.folder && fs.existsSync(item.folder)),
-      resumeCommand: item.resumeId ? `claude --resume ${item.resumeId}` : null,
+      resumeCommand: item.resumeCommand || null,
     };
   });
 
@@ -384,13 +426,20 @@ function registerIpc() {
 
   ipcMain.handle('item:copy-resume', (_e, id) => {
     const item = requireItem(id);
-    if (item.resumeId) clipboard.writeText(`claude --resume ${item.resumeId}`);
+    if (item.resumeCommand) clipboard.writeText(item.resumeCommand);
   });
 
   ipcMain.handle('settings:update', async (_e, patch) => {
     const before = { ...store.settings };
-    store.updateSettings(patch || {});
+    const allowed = { ...(patch || {}) };
+    if (!testingUnlocked) for (const key of TESTING_SETTINGS) delete allowed[key];
+    store.updateSettings(allowed);
     const after = store.settings;
+    if (after.readLocal !== before.readLocal || after.readBrowser !== before.readBrowser) {
+      scanner.cache.clear();
+      rescanSoon();
+    }
+    if (after.readBrowser && !before.readBrowser) link.requestResync(); // collect what waited meanwhile
     if (after.themeMode !== before.themeMode) applyTheme();
     if (after.watchDownloads !== before.watchDownloads) {
       watchDownloads();
@@ -445,14 +494,61 @@ function registerIpc() {
     pushSnapshot();
   });
 
+  // ---- Testing panel (temporary) ----
+
+  ipcMain.handle('testing:unlock', (_e, password) => {
+    testingUnlocked = store.checkTestingPassword(password || '');
+    pushSnapshot();
+    return testingUnlocked;
+  });
+
+  // Change the Testing tools password (only while unlocked).
+  ipcMain.handle('testing:set-password', (_e, password) => {
+    if (!testingUnlocked) throw new Error('Testing tools are locked');
+    const value = String(password || '');
+    if (value.length < 4 || value.length > 200) return { ok: false, error: 'Use 4 to 200 characters' };
+    store.setTestingPassword(value);
+    pushSnapshot();
+    return { ok: true };
+  });
+
+  ipcMain.handle('testing:default-password', () => {
+    if (!testingUnlocked) throw new Error('Testing tools are locked');
+    store.useDefaultTestingPassword();
+    pushSnapshot();
+  });
+
+  ipcMain.handle('testing:lock', () => {
+    testingUnlocked = false;
+    pushSnapshot();
+  });
+
+  // Deletes what this app saved. Claude's own files are never touched.
+  ipcMain.handle('testing:reset', async (_e, { alsoExtension = true } = {}) => {
+    if (!testingUnlocked) throw new Error('Testing tools are locked');
+    store.resetData();
+    const extensionInfo = link.info;
+    store.data.web.extension = extensionInfo; // keep knowing the extension is installed
+    if (alsoExtension) link.requestClear();
+    else link.requestResync(); // the extension will send back what it has seen
+    scanner.cache.clear();
+    items = new Map();
+    await rescan();
+    send('notice', {
+      kind: 'ok',
+      text: alsoExtension ? 'All stored data deleted (the extension clears its copy at its next check-in)' : 'App data deleted; the extension will send back what it has seen',
+    });
+  });
+
   ipcMain.handle('scan:refresh', async () => {
     await rescan();
     checkDownloads();
   });
 
-  // Opens your chat list on claude.ai in the browser; the extension picks it up from there.
-  ipcMain.handle('extension:open-claude', async () => {
-    await shell.openExternal('https://claude.ai/recents');
+  // Opens a platform's website (your chat list) in the browser; the extension picks it up from there.
+  ipcMain.handle('extension:open-website', async (_e, platformId) => {
+    const target = platformInfo(platformId) || platformInfo('claude');
+    await shell.openExternal(target.website);
   });
 
   ipcMain.handle('extension:resync', () => {

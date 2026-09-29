@@ -1,6 +1,7 @@
 'use strict';
 
-// Collects every chat, Cowork task and Code session into one list.
+// Collects everything into one list: Claude chats, Cowork tasks and Code sessions, ChatGPT chats
+// and Codex sessions. Each item says which platform it's from and what type it is.
 // Files are only re-read when they change (same size and modified time → cached result).
 
 const fsp = require('fs/promises');
@@ -8,6 +9,8 @@ const path = require('path');
 const { locateSources } = require('./paths');
 const { findRecordFiles, readRecord, findTranscriptInSessionDir } = require('./desktopSessions');
 const { parseTranscript, transcriptTitle } = require('./transcript');
+const { codexHome, findRolloutFiles, parseRollout } = require('./codex');
+const { chatUrl } = require('./platforms');
 const { truncate } = require('./text');
 
 const DESKTOP_LABELS = {
@@ -61,8 +64,11 @@ class Scanner {
     return index;
   }
 
-  async scan(importedChats = []) {
-    const locations = locateSources(this.locateOptions);
+  // local: false skips Claude's files on this computer (a Testing panel switch).
+  async scan(importedChats = [], { local = true } = {}) {
+    const locations = local
+      ? locateSources(this.locateOptions)
+      : { desktopDirs: [], sessionRoots: [], projectsDir: null, projectsDirExists: false };
     const items = new Map();
     const sources = [];
     const liveFiles = new Set();
@@ -70,7 +76,7 @@ class Scanner {
     const claimed = new Set();
 
     for (const { root, name, exists } of locations.sessionRoots) {
-      const status = { label: DESKTOP_LABELS[name], path: root, found: exists, count: 0, errors: 0 };
+      const status = { label: DESKTOP_LABELS[name], path: root, found: exists, count: 0, errors: 0, local: true };
       const fields = new Set();
       sources.push(status);
       if (!exists) continue;
@@ -113,6 +119,8 @@ class Scanner {
       found: locations.projectsDirExists,
       count: 0,
       errors: 0,
+      local: true,
+      note: local ? undefined : 'Turned off in Testing',
     };
     sources.push(terminal);
     for (const [sessionId, file] of projectTranscripts) {
@@ -130,13 +138,46 @@ class Scanner {
       }
     }
 
-    sources.push({
-      label: 'Claude chats – export and browser',
-      path: null,
-      found: importedChats.length > 0,
-      count: importedChats.length,
+    // Codex (ChatGPT's coding agent) sessions on this computer.
+    const codexSessions = local ? path.join(codexHome(this.locateOptions), 'sessions') : null;
+    const codex = {
+      label: 'Codex – sessions (~/.codex/sessions)',
+      path: codexSessions,
+      found: false,
+      count: 0,
       errors: 0,
-    });
+      local: true,
+      note: local ? undefined : 'Turned off in Testing',
+    };
+    sources.push(codex);
+    if (codexSessions) {
+      try {
+        codex.found = (await fsp.stat(codexSessions)).isDirectory();
+      } catch {
+        codex.found = false;
+      }
+    }
+    if (codex.found) {
+      for (const file of await findRolloutFiles(codexSessions)) {
+        try {
+          liveFiles.add(file);
+          const summary = await this.cached(file, parseRollout);
+          if (!summary.questions.length || !summary.sessionId) continue;
+          const item = codexItem(summary, this.lastWrite(file));
+          items.set(item.id, item);
+          codex.count++;
+        } catch (err) {
+          codex.errors++;
+          codex.lastError = err.message;
+        }
+      }
+    }
+
+    const chatCounts = {};
+    for (const chat of importedChats) chatCounts[chat.platform || 'claude'] = (chatCounts[chat.platform || 'claude'] || 0) + 1;
+    for (const [platformId, label] of [['claude', 'Claude chats – export and browser'], ['chatgpt', 'ChatGPT chats – export and browser']]) {
+      sources.push({ label, path: null, found: Boolean(chatCounts[platformId]), count: chatCounts[platformId] || 0, errors: 0 });
+    }
     for (const chat of importedChats) items.set(chat.id, chatItem(chat));
 
     for (const file of this.cache.keys()) if (!liveFiles.has(file)) this.cache.delete(file);
@@ -155,7 +196,13 @@ function detail(questions, firstMessage, lastMessage) {
 
 function activity(summary, lastWriteAt) {
   if (!summary) return null;
-  return { pending: summary.pending, finishedAt: summary.finishedAt, lastWriteAt: lastWriteAt || summary.updatedAt };
+  return {
+    pending: summary.pending,
+    finishedAt: summary.finishedAt,
+    lastWriteAt: lastWriteAt || summary.updatedAt,
+    asking: summary.asking,
+    asks: summary.asks,
+  };
 }
 
 function sessionItem(kind, record, summary, lastWriteAt) {
@@ -172,6 +219,7 @@ function sessionItem(kind, record, summary, lastWriteAt) {
   const updatedAt = Math.max(record.updatedAt || 0, (summary && summary.updatedAt) || 0) || null;
   return {
     id: `${kind}:${record.sessionId}`,
+    platform: 'claude',
     source: kind,
     title,
     createdAt: record.createdAt || (summary && summary.createdAt) || null,
@@ -179,6 +227,7 @@ function sessionItem(kind, record, summary, lastWriteAt) {
     archived: record.archived,
     folder: kind === 'code' ? record.cwd || (summary && summary.cwd) : record.sessionDir || record.cwd,
     resumeId: kind === 'code' ? record.cliSessionId || (summary && summary.sessionId) : null,
+    resumeCommand: kind === 'code' && (record.cliSessionId || (summary && summary.sessionId)) ? `claude --resume ${record.cliSessionId || summary.sessionId}` : null,
     url: null,
     activity: activity(summary, lastWriteAt),
     claudeUnread: record.unread,
@@ -190,6 +239,7 @@ function sessionItem(kind, record, summary, lastWriteAt) {
 function terminalItem(sessionId, summary, lastWriteAt) {
   return {
     id: `code:${sessionId}`,
+    platform: 'claude',
     source: 'code',
     title: transcriptTitle(summary) || 'Untitled session',
     createdAt: summary.createdAt,
@@ -197,6 +247,27 @@ function terminalItem(sessionId, summary, lastWriteAt) {
     archived: false,
     folder: summary.cwd,
     resumeId: sessionId,
+    resumeCommand: `claude --resume ${sessionId}`,
+    url: null,
+    activity: activity(summary, lastWriteAt),
+    claudeUnread: null,
+    claudeReadAt: null,
+    ...detail(summary.questions, summary.firstMessage, summary.lastMessage),
+  };
+}
+
+function codexItem(summary, lastWriteAt) {
+  return {
+    id: `chatgpt:codex:${summary.sessionId}`,
+    platform: 'chatgpt',
+    source: 'codex',
+    title: summary.title || 'Untitled Codex session',
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt,
+    archived: false,
+    folder: summary.cwd,
+    resumeId: summary.sessionId,
+    resumeCommand: `codex resume ${summary.sessionId}`,
     url: null,
     activity: activity(summary, lastWriteAt),
     claudeUnread: null,
@@ -206,19 +277,22 @@ function terminalItem(sessionId, summary, lastWriteAt) {
 }
 
 function chatItem(chat) {
+  const platform = chat.platform || 'claude';
   return {
     id: chat.id,
+    platform,
     source: 'chat',
     title: chat.title,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
-    archived: false,
+    archived: chat.archived === true,
     folder: null,
     resumeId: null,
-    url: /^[0-9a-f-]{8,}$/i.test(chat.uuid) ? `https://claude.ai/chat/${chat.uuid}` : null,
+    resumeCommand: null,
+    url: chatUrl(platform, chat.uuid),
     activity: chat.activity || null, // live only when the browser extension saw it
-    claudeUnread: null,
-    claudeReadAt: null,
+    claudeUnread: typeof chat.claudeUnread === 'boolean' ? chat.claudeUnread : null,
+    claudeReadAt: chat.claudeReadAt || null,
     ...detail(chat.questions, chat.firstMessage, chat.lastMessage),
   };
 }

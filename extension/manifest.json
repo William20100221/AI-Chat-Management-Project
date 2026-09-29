@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AI Chat Manager for Claude",
-  "version": "0.4.0",
-  "description": "Shows your claude.ai chats (titles, dates, and whether Claude is replying) in the AI Chat Manager app on this computer. Nothing leaves your computer.",
+  "name": "AI Chat Manager",
+  "version": "0.6.0",
+  "description": "Shows your claude.ai and chatgpt.com chats (titles, dates, and whether the AI is replying) in the AI Chat Manager app on this computer. Nothing leaves your computer.",
   "permissions": ["storage", "alarms"],
   "host_permissions": ["http://127.0.0.1/*"],
   "background": {
@@ -11,13 +11,13 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://claude.ai/*"],
+      "matches": ["https://claude.ai/*", "https://chatgpt.com/*", "https://chat.openai.com/*"],
       "js": ["page-hook.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://claude.ai/*"],
+      "matches": ["https://claude.ai/*", "https://chatgpt.com/*", "https://chat.openai.com/*"],
       "js": ["relay.js"],
       "run_at": "document_start"
     }

@@ -1,6 +1,6 @@
-// Links the claude.ai tab to the AI Chat Manager app on this computer (http://127.0.0.1:48653).
+// Links your claude.ai and chatgpt.com tabs to the AI Chat Manager app on this computer (http://127.0.0.1:48653).
 //
-// - Everything the claude.ai tab saw is delivered to the app. While the app is closed, updates
+// - Everything those tabs saw is delivered to the app. While the app is closed, updates
 //   wait here and are sent once it's running again.
 // - A copy of the latest data per chat is kept, so the app can ask for everything again
 //   (for example after it was reinstalled) without you reopening claude.ai.
@@ -23,9 +23,12 @@ function browserName() {
 }
 
 function keyOf(event) {
-  if (event.type === 'data') return `data:${event.url}`;
-  if (event.type === 'viewing') return `viewing:${event.uuid}`;
-  return `reply:${event.uuid}`; // a finished reply replaces its "started"
+  const site = event.platform || 'claude';
+  if (event.type === 'data') return `data:${site}:${event.url}`;
+  if (event.type === 'viewing') return `viewing:${site}:${event.uuid}`;
+  if (event.type === 'sidebar') return `sidebar:${site}`;
+  // "started" carries your message, so it keeps its own slot even if "finished" follows at once
+  return `${event.type}:${site}:${event.uuid}`;
 }
 
 // Storage reads and writes happen one at a time so updates never overwrite each other.
@@ -92,33 +95,45 @@ async function send() {
       body: JSON.stringify({ client: { version: VERSION, browser: browserName() }, events }),
     });
     ok = response.ok;
-    if (ok) {
-      const answer = await response.json().catch(() => ({}));
-      requests = Array.isArray(answer.requests) ? answer.requests : [];
-    } else {
-      error = `The app answered ${response.status}`;
-    }
+    const answer = await response.json().catch(() => ({}));
+    requests = Array.isArray(answer.requests) ? answer.requests : [];
+    if (response.status === 423) error = 'Paused in AI Chat Manager (Testing)';
+    else if (!ok) error = `The app answered ${response.status}`;
   } catch {
     error = 'AI Chat Manager is not running';
   }
 
-  await serial(async () => {
+  const status = await serial(async () => {
     const { waiting: now = {} } = await ext.storage.local.get('waiting');
     if (ok) {
       for (const [key, event] of entries) if (now[key] && now[key].at === event.at) delete now[key];
     }
-    await ext.storage.local.set({ waiting: now, status: { ok, error, at: Date.now(), waiting: Object.keys(now).length } });
+    const next = { ok, error, at: Date.now(), waiting: Object.keys(now).length };
+    await ext.storage.local.set({ waiting: now, status: next });
+    return next;
   });
 
+  if (requests.includes('clear')) {
+    // The app deleted its data (Testing) and asked us to forget ours too.
+    await serial(() => ext.storage.local.set({ waiting: {}, known: {} }));
+  }
   if (requests.includes('resync')) {
     await resync();
     sendSoon();
   }
+  return status;
 }
 
-ext.runtime.onMessage.addListener((message) => {
+ext.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message && message.type === 'ai-chat-manager' && message.event) queue(message.event);
-  if (message && message.type === 'ai-chat-manager-send-now') send();
+  if (message && message.type === 'ai-chat-manager-send-now') {
+    // The popup waits for the result, so its button can show what happened.
+    send()
+      .then((status) => sendResponse(status || { ok: true, waiting: 0 }))
+      .catch(() => sendResponse({ ok: false, error: 'Something went wrong' }));
+    return true;
+  }
+  return false;
 });
 
 ext.alarms.create('ai-chat-manager-check-in', { periodInMinutes: 1 });

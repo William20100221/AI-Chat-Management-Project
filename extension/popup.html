@@ -4,22 +4,49 @@
   <meta charset="utf-8">
   <title>AI Chat Manager</title>
   <style>
-    :root { color-scheme: light dark; --ok: #1b7f4b; --warn: #b3261e; }
-    body { width: 280px; margin: 0; padding: 16px; font: 14px/20px "Segoe UI", system-ui, sans-serif; }
-    h1 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
-    .state { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
-    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); flex: none; }
+    :root {
+      color-scheme: light dark;
+      --ok: #1b7f4b;
+      --bad: #b3261e;
+      --wait: #8a6d00;
+      --primary: light-dark(#4f46e5, #a5b4fc);
+      --on-primary: light-dark(#fff, #1e1b4b);
+    }
+    body { box-sizing: border-box; width: 300px; margin: 0; padding: 16px; font: 14px/20px "Segoe UI", system-ui, sans-serif; }
+    h1 { margin: 0 0 10px; font-size: 16px; font-weight: 600; }
+    .state { display: flex; gap: 10px; align-items: center; min-height: 24px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex: none; transition: background 0.2s; }
     .ok .dot { background: var(--ok); }
+    .paused .dot { background: var(--wait); }
+    .checking .dot { background: var(--primary); animation: pulse 1s ease-in-out infinite; }
     p { margin: 6px 0; opacity: 0.8; font-size: 13px; }
-    button { margin-top: 8px; padding: 6px 14px; border-radius: 16px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; cursor: pointer; }
+    button {
+      display: inline-flex; align-items: center; gap: 8px;
+      margin-top: 10px; padding: 7px 16px; border: 0; border-radius: 18px;
+      background: var(--primary); color: var(--on-primary); font: 500 13px/20px "Segoe UI", system-ui, sans-serif; cursor: pointer;
+      transition: transform 0.1s, opacity 0.2s;
+    }
+    button:active { transform: scale(0.96); }
+    button:disabled { opacity: 0.75; cursor: default; }
+    .spinner {
+      width: 14px; height: 14px; border-radius: 50%;
+      border: 2px solid currentColor; border-right-color: transparent;
+      animation: spin 0.7s linear infinite;
+    }
+    .result { margin-left: 8px; font-size: 13px; font-weight: 600; opacity: 0; transition: opacity 0.2s; }
+    .result.show { opacity: 1; }
+    .result.good { color: var(--ok); }
+    .result.bad { color: var(--bad); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse { 50% { opacity: 0.3; } }
   </style>
 </head>
 <body>
   <h1>AI Chat Manager</h1>
-  <div id="state" class="state"><span class="dot"></span><span id="state-text">Checking…</span></div>
+  <div id="state" class="state checking"><span class="dot"></span><span id="state-text">Checking…</span></div>
   <p id="detail"></p>
-  <p>Open claude.ai and your chats show up in the app. Nothing leaves your computer.</p>
-  <button id="send">Send now</button>
+  <p>Open claude.ai or chatgpt.com and your chats show up in the app. Nothing leaves your computer.</p>
+  <button id="send" type="button"><span id="send-label">Send now</span></button><span id="result" class="result"></span>
   <script src="popup.js"></script>
 </body>
 </html>

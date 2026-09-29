@@ -13,7 +13,7 @@ const { itemState, RESPONDING_TIMEOUT, DAY } = require('../src/core/status');
 const { Store } = require('../src/core/store');
 const { plainText } = require('../src/core/text');
 const {
-  readClaudeExportZip,
+  readExportZip,
   readExportFile,
   parseManifest,
   exportPart,
@@ -62,6 +62,29 @@ test('transcript: knows whether Claude is still replying', () => {
 
   applyEntry(s, { type: 'assistant', isSidechain: true, timestamp: '2026-09-28T10:06:00Z', message: { stop_reason: 'tool_use', content: [] } });
   assert.equal(s.pending, false, 'helper-agent lines are ignored');
+});
+
+test('transcript: knows when Claude is asking you something', () => {
+  const s = emptySummary();
+  applyEntry(s, user('Set up the project', '2026-09-28T10:00:00Z'));
+  applyEntry(s, {
+    type: 'assistant',
+    timestamp: '2026-09-28T10:00:10Z',
+    message: { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'AskUserQuestion', input: { questions: [{ question: 'Which database should I use?' }] } }] },
+  });
+  assert.deepEqual(s.asking, { text: 'Which database should I use?', at: Date.parse('2026-09-28T10:00:10Z') });
+
+  applyEntry(s, { type: 'user', timestamp: '2026-09-28T10:02:00Z', toolUseResult: {}, message: { content: [{ type: 'tool_result', content: 'Postgres' }] } });
+  assert.equal(s.asking, null, 'answered');
+
+  applyEntry(s, { type: 'assistant', timestamp: '2026-09-28T10:03:00Z', message: { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'ExitPlanMode', input: {} }] } });
+  assert.equal(s.asking.text, 'Claude has a plan ready for your approval');
+
+  applyEntry(s, assistant('All set up. Want me to add tests too?', '2026-09-28T10:05:00Z'));
+  assert.equal(s.asking, null);
+  assert.equal(s.asks, true, 'the reply ends with a question');
+  applyEntry(s, assistant('Tests added.', '2026-09-28T10:06:00Z'));
+  assert.equal(s.asks, false);
 });
 
 test('text: previews drop Markdown symbols', () => {
@@ -139,6 +162,9 @@ test('state: replying, new reply, seen, pinned, recent, done', () => {
   const stale = { ...base, activity: { pending: true, finishedAt: null, lastWriteAt: now - RESPONDING_TIMEOUT - 1 } };
   const finished = { ...base, activity: { pending: false, finishedAt: now - 60 * 1000, lastWriteAt: now - 60 * 1000 } };
   const old = { updatedAt: now - 30 * DAY, activity: null };
+  const asking = { ...base, activity: { pending: true, asking: { text: 'Which one?' }, lastWriteAt: now - 5 * 60 * 60 * 1000 } };
+  assert.equal(itemState(asking, { now }), 'asking', 'waits for you with no 10-minute limit');
+  assert.equal(itemState({ ...asking, activity: { ...asking.activity, lastWriteAt: now - 2 * DAY } }, { now }), 'recent', 'a day-old unanswered question is dropped');
 
   assert.equal(itemState(replying, { now }), 'responding');
   assert.equal(itemState(stale, { now }), 'recent', 'a turn that went quiet for 10 minutes is not "replying"');
@@ -146,7 +172,8 @@ test('state: replying, new reply, seen, pinned, recent, done', () => {
   assert.equal(itemState(finished, { now, seenAt: now - 10 * 1000 }), 'recent', 'looked at after it finished');
   assert.equal(itemState({ ...finished, claudeReadAt: now - 1000 }, { now }), 'recent', "Claude's own read time counts");
   assert.equal(itemState({ ...finished, claudeUnread: false }, { now }), 'recent');
-  assert.equal(itemState({ ...base, activity: null, claudeUnread: true }, { now }), 'recent', 'no transcript, no live state');
+  assert.equal(itemState({ ...base, activity: null, claudeUnread: true }, { now }), 'new-reply', "Claude's blue dot counts on its own");
+  assert.equal(itemState({ ...base, activity: null, claudeUnread: true }, { now, openedAt: now }), 'recent', 'unless you opened it here since');
   assert.equal(itemState(old, { now, override: { pinned: true } }), 'pinned');
   assert.equal(itemState(old, { now }), 'older');
   assert.equal(itemState(old, { now, recentDays: 60 }), 'recent');
@@ -166,7 +193,7 @@ function zip(files) {
 }
 
 test('chat export: reads the older single-zip export', () => {
-  const chats = readClaudeExportZip(zip({ 'conversations.json': claudeExportConversations(), 'users.json': [] }));
+  const chats = readExportZip(zip({ 'conversations.json': claudeExportConversations(), 'users.json': [] }));
   assert.equal(chats.length, 1, 'the empty placeholder chat is skipped');
   const [chat] = chats;
   assert.equal(chat.title, 'Becoming a developer career path');
@@ -178,28 +205,28 @@ test('chat export: reads the older single-zip export', () => {
 
 test('chat export: reads newer layouts (one file per chat, JSONL, wrapped, titles only)', () => {
   const [first] = claudeExportConversations();
-  const perFile = readClaudeExportZip(zip({ 'conversations/a.json': first, 'conversations/b.json': { ...first, uuid: 'b', name: 'Second' } }));
+  const perFile = readExportZip(zip({ 'conversations/a.json': first, 'conversations/b.json': { ...first, uuid: 'b', name: 'Second' } }));
   assert.deepEqual(perFile.map((c) => c.title).sort(), ['Becoming a developer career path', 'Second']);
 
-  const jsonl = readClaudeExportZip(zip({ 'conversations.jsonl': `${JSON.stringify(first)}\n${JSON.stringify({ ...first, uuid: 'c' })}\n` }));
+  const jsonl = readExportZip(zip({ 'conversations.jsonl': `${JSON.stringify(first)}\n${JSON.stringify({ ...first, uuid: 'c' })}\n` }));
   assert.equal(jsonl.length, 2);
 
-  const wrapped = readClaudeExportZip(zip({ 'data.json': { conversations: [first] } }));
+  const wrapped = readExportZip(zip({ 'data.json': { conversations: [first] } }));
   assert.equal(wrapped.length, 1);
 
-  const messagesKey = readClaudeExportZip(zip({ 'conversations.json': [{ id: 'd', title: 'Uses messages', created_at: '2026-09-01T00:00:00Z', messages: [{ role: 'user', content: 'hi' }] }] }));
+  const messagesKey = readExportZip(zip({ 'conversations.json': [{ id: 'd', title: 'Uses messages', created_at: '2026-09-01T00:00:00Z', messages: [{ role: 'user', content: 'hi' }] }] }));
   assert.equal(messagesKey[0].title, 'Uses messages');
   assert.equal(messagesKey[0].questions[0].text, 'hi');
 
-  const titlesOnly = readClaudeExportZip(zip({ 'conversations_metadata.json': [{ uuid: 'e', name: 'Only a title', updated_at: '2026-09-02T00:00:00Z' }] }));
+  const titlesOnly = readExportZip(zip({ 'conversations_metadata.json': [{ uuid: 'e', name: 'Only a title', updated_at: '2026-09-02T00:00:00Z' }] }));
   assert.equal(titlesOnly[0].title, 'Only a title');
   assert.equal(titlesOnly[0].questions.length, 0);
 });
 
 test('chat export: ignores ChatGPT exports and unrelated zips', () => {
-  assert.equal(readClaudeExportZip(zip({ 'conversations.json': [{ title: 'x', mapping: {} }] })), null);
-  assert.equal(readClaudeExportZip(zip({ 'projects.json': [{ uuid: 'p', name: 'A project', created_at: '2026-01-01' }] })), null);
-  assert.equal(readClaudeExportZip(zip({ 'photo.txt': 'hi' })), null);
+  assert.equal(readExportZip(zip({ 'conversations.json': [{ title: 'x', mapping: {} }] })), null);
+  assert.equal(readExportZip(zip({ 'projects.json': [{ uuid: 'p', name: 'A project', created_at: '2026-01-01' }] })), null);
+  assert.equal(readExportZip(zip({ 'photo.txt': 'hi' })), null);
 });
 
 test('chat export: reads the manifest from the export email', async () => {
@@ -275,7 +302,62 @@ test('store: marks, seen times, settings and chat merging survive a restart', ()
   assert.equal(reopened.settings.compact, true);
   assert.ok(reopened.seenAt('code:1') >= reopened.data.installedAt);
   assert.deepEqual(reopened.data.chats.map((c) => c.id), ['chat:a', 'chat:b', 'chat:c']);
-  assert.equal(reopened.data.lastImport.count, 3);
+  assert.equal(reopened.lastImport('claude').count, 3);
+});
+
+test('store: testing switches and "delete all stored data"', () => {
+  const file = path.join(tmpDir('acm-reset-'), 'state.json');
+  const store = new Store(file);
+  assert.equal(store.settings.readLocal, true);
+  assert.equal(store.settings.readBrowser, true);
+  store.updateSettings({ readLocal: false, readBrowser: false, themeColor: 'rose' });
+  store.setMark('chat:1', 'pinned');
+  store.markSeen(['chat:1']);
+  store.setChats([{ id: 'chat:a' }], { file: 'x.zip' });
+  store.saveWindowBounds('full', { x: 1, y: 2, width: 900, height: 600 });
+  store.data.web.chats.z = { id: 'chat:z' };
+
+  store.resetData();
+  const reopened = new Store(file);
+  assert.deepEqual(reopened.data.overrides, {});
+  assert.deepEqual(reopened.data.seen, {});
+  assert.deepEqual(reopened.data.chats, []);
+  assert.deepEqual(reopened.data.web.chats, {});
+  assert.deepEqual(reopened.data.lastImports, {});
+  assert.equal(reopened.settings.readLocal, false, 'settings stay');
+  assert.equal(reopened.settings.themeColor, 'rose');
+  assert.deepEqual(reopened.windowBounds('full'), { x: 1, y: 2, width: 900, height: 600 });
+});
+
+test('store: the Testing password can be changed, is hashed, and survives "delete all"', () => {
+  const file = path.join(tmpDir('acm-password-'), 'state.json');
+  const store = new Store(file);
+  assert.equal(store.checkTestingPassword('TESTING_PASSWORD'), true, 'default password');
+  assert.equal(store.checkTestingPassword('wrong'), false);
+  assert.equal(store.hasCustomTestingPassword(), false);
+
+  store.setTestingPassword('my new secret');
+  const saved = fs.readFileSync(file, 'utf8');
+  assert.ok(!saved.includes('my new secret'), 'never stored as text');
+  let reopened = new Store(file);
+  assert.equal(reopened.checkTestingPassword('my new secret'), true);
+  assert.equal(reopened.checkTestingPassword('TESTING_PASSWORD'), false, 'the default stops working');
+  assert.equal(reopened.hasCustomTestingPassword(), true);
+
+  reopened.resetData();
+  assert.equal(new Store(file).checkTestingPassword('my new secret'), true, 'deleting data keeps your password');
+
+  reopened.useDefaultTestingPassword();
+  reopened = new Store(file);
+  assert.equal(reopened.checkTestingPassword('TESTING_PASSWORD'), true);
+  assert.equal(reopened.hasCustomTestingPassword(), false);
+});
+
+test('scanner: skips Claude files on this computer when that switch is off', async () => {
+  const fake = makeFakeHome();
+  const { items, sources } = await new Scanner(fake.options).scan([], { local: false });
+  assert.equal(items.length, 0);
+  assert.ok(sources.every((s) => !s.found || !s.path));
 });
 
 test('store: upgrades settings saved by version 0.1', () => {

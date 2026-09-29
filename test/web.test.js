@@ -36,24 +36,24 @@ test('web chats: list and chat data give titles, dates and messages', () => {
     { type: 'data', url: `/api/organizations/o/chat_conversations/${A}?tree=True`, at: T + 1, body: chatBody },
   ], T + 5);
 
-  const chat = state.chats[A];
+  const chat = state.chats[`chat:${A}`];
   assert.equal(chat.title, 'Robot arm kinematics');
   assert.equal(chat.createdAt, Date.parse('2026-09-28T08:00:00Z'));
   assert.equal(chat.updatedAt, Date.parse('2026-09-29T09:00:00Z'));
   assert.deepEqual(chat.questions.map((q) => q.text), ['How do I solve inverse kinematics?']);
   assert.equal(chat.lastMessage.text, 'Short answer\nUse the Jacobian.'.replace(/\s+/g, ' '));
-  assert.equal(state.chats[B], undefined, 'an untitled chat with no messages waits until it has a title');
+  assert.equal(state.chats[`chat:${B}`], undefined, 'an untitled chat with no messages waits until it has a title');
 
   // a later list refresh (no messages) keeps the messages we already have
   applyWebEvents(state, [{ type: 'data', url: '/api/x/chat_conversations', at: T + 10, body: listBody }], T + 10);
-  assert.equal(state.chats[A].questions.length, 1);
+  assert.equal(state.chats[`chat:${A}`].questions.length, 1);
 });
 
 test('web chats: replying, new reply, and seen while watching', () => {
   const state = emptyWebState();
   applyWebEvents(state, [{ type: 'reply-started', uuid: B, at: T }], T + 1);
-  assert.equal(state.chats[B].title, 'New chat');
-  assert.equal(state.chats[B].activity.pending, true);
+  assert.equal(state.chats[`chat:${B}`].title, 'New chat');
+  assert.equal(state.chats[`chat:${B}`].activity.pending, true);
 
   let [chat] = combineChats([], state);
   assert.equal(itemState(chat, { now: T + 2000 }), 'responding');
@@ -67,6 +67,48 @@ test('web chats: replying, new reply, and seen while watching', () => {
   assert.equal(itemState(chat, { now: T + 41000, seenAt: seen[0].at }), 'recent');
 });
 
+test('web chats: your message and the reply text arrive live; a reply ending in a question is flagged', () => {
+  const state = emptyWebState();
+  applyWebEvents(state, [
+    { type: 'data', url: '/list', at: T, body: listBody },
+    { type: 'reply-started', uuid: A, at: T + 1000, prompt: 'Now do it for **3** links' },
+    { type: 'reply-finished', uuid: A, at: T + 9000, text: '## Three links\nAdd a third angle.', tail: 'Should I also handle joint limits?' },
+  ], T + 10000);
+  const chat = state.chats[`chat:${A}`];
+  assert.equal(chat.questions[chat.questions.length - 1].text, 'Now do it for 3 links');
+  assert.equal(chat.lastMessage.role, 'assistant');
+  assert.equal(chat.lastMessage.text, 'Three links Add a third angle.');
+  assert.equal(chat.activity.asks, true);
+});
+
+test("web chats: Claude's unread marker from chat data or the sidebar", () => {
+  const state = emptyWebState();
+  applyWebEvents(state, [{ type: 'data', url: '/list', at: T, body: [
+    { uuid: A, name: 'Unread one', updated_at: '2026-09-29T09:00:00Z', is_unread: true },
+    { uuid: B, name: 'Read one', updated_at: '2026-09-29T09:00:00Z', is_unread: false },
+  ] }], T);
+  assert.equal(state.chats[`chat:${A}`].claudeUnread, true);
+  assert.equal(state.chats[`chat:${B}`].claudeUnread, false);
+  assert.ok(state.fields.claude.includes('is_unread'), 'field names are kept for the Testing panel');
+
+  let [a, b] = combineChats([], state);
+  assert.equal(itemState(a, { now: T }), 'new-reply');
+  assert.equal(itemState(b, { now: T }), 'recent');
+
+  // the sidebar can mark B unread; when its dot goes away, it's read
+  applyWebEvents(state, [{ type: 'sidebar', at: T + 1, visible: [A, B], unread: [B], sample: '<a href="/chat/x"><span>…</span></a>' }], T + 1);
+  assert.equal(state.chats[`chat:${B}`].claudeUnread, true);
+  assert.ok(state.sidebarSample.claude.startsWith('<a'));
+  applyWebEvents(state, [{ type: 'sidebar', at: T + 2, visible: [A, B], unread: [] }], T + 2);
+  assert.equal(state.chats[`chat:${B}`].claudeUnread, null);
+  assert.equal(state.chats[`chat:${A}`].claudeUnread, true, 'a missing dot never overrides the chat data');
+
+  // a new reply clears an old "read" flag so it can show as new
+  applyWebEvents(state, [{ type: 'reply-finished', uuid: A, at: T + 3, text: 'Done.' }], T + 3);
+  [a] = combineChats([], state);
+  assert.equal(itemState(a, { now: T + 4, seenAt: 0 }), 'new-reply');
+});
+
 test('web chats: events are applied in time order and bad ones are ignored', () => {
   const state = emptyWebState();
   const { applied } = applyWebEvents(state, [
@@ -78,11 +120,11 @@ test('web chats: events are applied in time order and bad ones are ignored', () 
     null,
   ], T + 10);
   assert.equal(applied, 3);
-  assert.equal(state.chats[A].activity.pending, false, 'finished comes after started, whatever order they arrived in');
+  assert.equal(state.chats[`chat:${A}`].activity.pending, false, 'finished comes after started, whatever order they arrived in');
   assert.equal(Object.keys(state.chats).length, 1);
 
   applyWebEvents(state, [{ type: 'reply-started', uuid: A, at: T + 10 ** 9 }], T + 20);
-  assert.equal(state.chats[A].activity.lastWriteAt, T + 20, 'times in the future are clamped to now');
+  assert.equal(state.chats[`chat:${A}`].activity.lastWriteAt, T + 20, 'times in the future are clamped to now');
 });
 
 test('web chats: combined with the export, live data wins where newer', () => {
@@ -127,6 +169,7 @@ test('bridge: accepts the extension, rejects websites', async () => {
       onEvents: (events, { client }) => {
         received.push(...events);
         lastClient = client;
+        if (client.paused) return { paused: true, requests: [] };
         return { requests: ['resync'] };
       },
       onStatus: (s) => s.listening && resolve(s.port),
@@ -145,6 +188,9 @@ test('bridge: accepts the extension, rejects websites', async () => {
 
     assert.equal((await request(port, { headers: { ...good, Origin: 'moz-extension://1234-abcd' }, body: payload })).status, 200);
     assert.equal(received.length, 2);
+    const paused = await request(port, { headers: { ...good, Origin: 'chrome-extension://abc' }, body: JSON.stringify({ client: { paused: true }, events: [] }) });
+    assert.equal(paused.status, 423, 'paused (Testing switch): the extension keeps its updates');
+    received.length = 2;
 
     assert.equal((await request(port, { headers: { ...good, Origin: 'https://evil.example' }, body: payload })).status, 403, 'websites are refused');
     assert.equal((await request(port, { headers: { ...good, Host: 'evil.example:80' }, body: payload })).status, 403, 'DNS rebinding is refused');
@@ -173,6 +219,9 @@ test('extension link: connected status, and one "send everything" request per ap
 
   link.requestResync(); // the "Get everything again" button
   assert.deepEqual(link.contact({}, T + 120000).requests, ['resync']);
+
+  link.requestClear(); // Testing: delete all stored data, including the extension's copy
+  assert.deepEqual(link.contact({}, T + 121000).requests, ['clear'], 'clear, and no resync that would bring it back');
 
   const restarted = new ExtensionLink(link.info); // saved info survives an app restart
   assert.equal(restarted.status(T + 120000).everConnected, true);
