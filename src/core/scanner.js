@@ -1,15 +1,17 @@
 'use strict';
 
-// Collects everything into one list: Claude chats, Cowork tasks and Code sessions, ChatGPT chats
-// and Codex sessions. Each item says which platform it's from and what type it is.
+// Collects everything into one list: Claude chats, Cowork tasks and Code sessions, ChatGPT chats,
+// and the ChatGPT app's Work and Codex chats. Each item says which platform it's from and what type it is.
 // Files are only re-read when they change (same size and modified time → cached result).
 
+const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const { locateSources } = require('./paths');
 const { findRecordFiles, readRecord, findTranscriptInSessionDir } = require('./desktopSessions');
 const { parseTranscript, transcriptTitle } = require('./transcript');
-const { codexHome, findRolloutFiles, parseRollout } = require('./codex');
+const { codexHome, findRolloutFiles, parseRollout, readSessionIndex, isBackgroundThread, threadKind } = require('./codex');
+const { findChatGPTApps, findStateDb, readThreads } = require('./chatgptApp');
 const { chatUrl } = require('./platforms');
 const { truncate } = require('./text');
 
@@ -22,6 +24,123 @@ class Scanner {
   constructor(locateOptions = {}) {
     this.locateOptions = locateOptions;
     this.cache = new Map(); // file → { size, mtimeMs, value }
+    this.threadsCache = null; // the ChatGPT app's chat list: { file, stamp, readAt, threads, error }
+  }
+
+  // The ChatGPT app's chat list (state_5.sqlite). It's copied before reading, so it's re-read only
+  // when it changed, and at most every 20 seconds while the app is busy writing to it.
+  async appThreads(home) {
+    const found = await findStateDb(home, this.locateOptions);
+    if (!found) {
+      this.threadsCache = null;
+      return { file: null, threads: [], error: null };
+    }
+    const hit = this.threadsCache;
+    const fresh = hit && hit.file === found.file && (hit.stamp === found.stamp || Date.now() - hit.readAt < 20000);
+    if (!fresh) {
+      try {
+        const threads = await readThreads(found.file, this.locateOptions);
+        this.threadsCache = { file: found.file, stamp: found.stamp, readAt: Date.now(), threads, error: null };
+      } catch (err) {
+        // Keep the last good list; try again next time.
+        this.threadsCache = { file: found.file, stamp: null, readAt: Date.now(), threads: hit && hit.file === found.file ? hit.threads : [], error: err.message };
+      }
+    }
+    return this.threadsCache;
+  }
+
+  async scanCodex(local, items, liveFiles) {
+    const home = codexHome(this.locateOptions);
+    const apps = local ? findChatGPTApps(this.locateOptions) : [];
+    const app = apps.find((a) => a.kind === 'current') || null;
+    const classic = apps.find((a) => a.kind === 'classic') || null;
+    const off = local ? undefined : 'Turned off in Testing';
+
+    const appSource = {
+      label: 'ChatGPT app – Work and Codex chats',
+      path: app ? app.path : null,
+      found: Boolean(app),
+      count: 0,
+      errors: 0,
+      local: true,
+      app: 'ChatGPT app',
+      note: off || (app
+        ? 'Its Chat-mode chats are kept on OpenAI’s servers, not on this computer; they come from chatgpt.com (browser extension) or your ChatGPT export.'
+        : 'The ChatGPT desktop app (the one with Chat, Work and Codex) isn’t installed.'),
+    };
+    const filesSource = {
+      label: 'Codex – sessions (~/.codex/sessions)',
+      path: local ? path.join(home, 'sessions') : null,
+      found: false,
+      count: 0,
+      errors: 0,
+      local: true,
+      app: 'Codex',
+      note: off,
+    };
+    const sources = [appSource, filesSource];
+    if (classic) {
+      sources.push({
+        label: 'ChatGPT Classic app',
+        path: classic.path,
+        found: true,
+        count: 0,
+        errors: 0,
+        local: true,
+        note: 'Found. ChatGPT Classic keeps no chat files that can be read (they stay on OpenAI’s servers; on a Mac its cache is encrypted), so its chats come from chatgpt.com or your ChatGPT export.',
+      });
+    }
+    if (!local) return sources;
+
+    // The app's own list: titles, names, archived. Missing when only the Codex CLI is used.
+    const list = await this.appThreads(home);
+    // The Codex CLI writes the same list, so without the app its chats count as Codex sessions.
+    const listSource = app ? appSource : filesSource;
+    if (list.error) {
+      listSource.errors++;
+      listSource.lastError = `Couldn’t read the chat list ${list.file} (${list.error})`;
+    }
+    if (list.file && app && local) appSource.note = `Reads its chat list (${list.file}) and ~/.codex/sessions. ${appSource.note}`;
+    const threads = new Map(list.threads.map((t) => [t.id, t]));
+    const names = await readSessionIndex(path.join(home, 'session_index.jsonl'));
+
+    // Every session file, including archived ones.
+    const files = [];
+    for (const folder of ['sessions', 'archived_sessions']) {
+      const dir = path.join(home, folder);
+      if (!isDirSync(dir)) continue;
+      if (folder === 'sessions') filesSource.found = true;
+      files.push(...(await findRolloutFiles(dir)).map((file) => ({ file, archived: folder === 'archived_sessions' })));
+    }
+    const seen = new Set();
+    for (const { file, archived } of files) {
+      try {
+        liveFiles.add(file);
+        const summary = await this.cached(file, parseRollout);
+        if (!summary.sessionId) continue;
+        const id = summary.sessionId.toLowerCase();
+        const thread = threads.get(id) || null;
+        if (summary.background || (thread && isBackgroundThread(thread))) continue;
+        if (!summary.questions.length && !(thread && (thread.preview || thread.firstUserMessage))) continue;
+        seen.add(id);
+        const item = codexItem(summary, thread, names.get(id), { archived, app, lastWriteAt: this.lastWrite(file) });
+        items.set(item.id, item);
+        if (thread) listSource.count++;
+        else filesSource.count++;
+      } catch (err) {
+        filesSource.errors++;
+        filesSource.lastError = err.message;
+      }
+    }
+
+    // Chats in the app's list whose session file wasn't found: show what the list knows.
+    for (const thread of threads.values()) {
+      if (seen.has(thread.id) || isBackgroundThread(thread) || !(thread.preview || thread.firstUserMessage)) continue;
+      const item = codexItem(null, thread, names.get(thread.id), { archived: false, app, lastWriteAt: null });
+      items.set(item.id, item);
+      listSource.count++;
+    }
+    return sources;
   }
 
   async cached(file, read) {
@@ -76,7 +195,7 @@ class Scanner {
     const claimed = new Set();
 
     for (const { root, name, exists } of locations.sessionRoots) {
-      const status = { label: DESKTOP_LABELS[name], path: root, found: exists, count: 0, errors: 0, local: true };
+      const status = { label: DESKTOP_LABELS[name], path: root, found: exists, count: 0, errors: 0, local: true, app: 'Claude Desktop' };
       const fields = new Set();
       sources.push(status);
       if (!exists) continue;
@@ -120,6 +239,7 @@ class Scanner {
       count: 0,
       errors: 0,
       local: true,
+      app: 'Claude Code',
       note: local ? undefined : 'Turned off in Testing',
     };
     sources.push(terminal);
@@ -138,40 +258,8 @@ class Scanner {
       }
     }
 
-    // Codex (ChatGPT's coding agent) sessions on this computer.
-    const codexSessions = local ? path.join(codexHome(this.locateOptions), 'sessions') : null;
-    const codex = {
-      label: 'Codex – sessions (~/.codex/sessions)',
-      path: codexSessions,
-      found: false,
-      count: 0,
-      errors: 0,
-      local: true,
-      note: local ? undefined : 'Turned off in Testing',
-    };
-    sources.push(codex);
-    if (codexSessions) {
-      try {
-        codex.found = (await fsp.stat(codexSessions)).isDirectory();
-      } catch {
-        codex.found = false;
-      }
-    }
-    if (codex.found) {
-      for (const file of await findRolloutFiles(codexSessions)) {
-        try {
-          liveFiles.add(file);
-          const summary = await this.cached(file, parseRollout);
-          if (!summary.questions.length || !summary.sessionId) continue;
-          const item = codexItem(summary, this.lastWrite(file));
-          items.set(item.id, item);
-          codex.count++;
-        } catch (err) {
-          codex.errors++;
-          codex.lastError = err.message;
-        }
-      }
-    }
+    // The ChatGPT desktop app (Work and Codex chats) and the Codex CLI share ~/.codex.
+    for (const source of await this.scanCodex(local, items, liveFiles)) sources.push(source);
 
     const chatCounts = {};
     for (const chat of importedChats) chatCounts[chat.platform || 'claude'] = (chatCounts[chat.platform || 'claude'] || 0) + 1;
@@ -256,24 +344,46 @@ function terminalItem(sessionId, summary, lastWriteAt) {
   };
 }
 
-function codexItem(summary, lastWriteAt) {
+// A Work or Codex chat. summary: the session file (may be null); thread: the ChatGPT app's list
+// entry (may be null); name: a name you gave it.
+function codexItem(summary, thread, name, { archived, app, lastWriteAt }) {
+  const id = ((summary && summary.sessionId) || thread.id).toLowerCase();
+  const kind = thread && thread.originator ? threadKind(thread.originator) : summary ? summary.kind : 'codex';
+  const firstAsk = thread && (thread.firstUserMessage || thread.preview);
+  const questions = summary && summary.questions.length
+    ? summary.questions
+    : firstAsk ? [{ role: 'user', text: truncate(firstAsk), at: thread.createdAt }] : [];
+  // The app's title is worth showing only when it isn't just your first message again.
+  const appTitle = thread && thread.title && thread.title !== thread.firstUserMessage ? thread.title : null;
+  const title = (thread && thread.name) || name || appTitle || (summary && summary.title) || truncate(firstAsk, 80)
+    || (kind === 'work' ? 'Untitled Work chat' : 'Untitled Codex session');
+  const updatedAt = Math.max((summary && summary.updatedAt) || 0, (thread && thread.updatedAt) || 0) || null;
   return {
-    id: `chatgpt:codex:${summary.sessionId}`,
+    id: `chatgpt:codex:${id}`, // Work chats keep this id too, so pins survive the app changing modes
     platform: 'chatgpt',
-    source: 'codex',
-    title: summary.title || 'Untitled Codex session',
-    createdAt: summary.createdAt,
-    updatedAt: summary.updatedAt,
-    archived: false,
-    folder: summary.cwd,
-    resumeId: summary.sessionId,
-    resumeCommand: `codex resume ${summary.sessionId}`,
-    url: null,
+    source: kind,
+    title,
+    createdAt: (summary && summary.createdAt) || (thread && thread.createdAt) || null,
+    updatedAt,
+    archived: Boolean(archived || (thread && thread.archived)),
+    folder: (summary && summary.cwd) || (thread && thread.cwd) || null,
+    resumeId: id,
+    resumeCommand: `codex resume ${id}`,
+    // codex://threads/<id> opens the chat in the ChatGPT app.
+    url: app ? `codex://threads/${id}` : null,
     activity: activity(summary, lastWriteAt),
     claudeUnread: null,
     claudeReadAt: null,
-    ...detail(summary.questions, summary.firstMessage, summary.lastMessage),
+    ...detail(questions, summary && summary.firstMessage, summary && summary.lastMessage),
   };
+}
+
+function isDirSync(dir) {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function chatItem(chat) {

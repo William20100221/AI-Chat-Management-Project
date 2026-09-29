@@ -58,7 +58,7 @@ test('platforms: ids, links and what the window is told', () => {
   assert.equal(chatUrl('chatgpt', 'not-an-id'), null);
   const described = describePlatforms();
   assert.deepEqual(described.map((p) => p.id), ['claude', 'chatgpt']);
-  assert.deepEqual(described[1].types.map((t) => t.id), ['chat', 'codex']);
+  assert.deepEqual(described[1].types.map((t) => t.id), ['chat', 'work', 'codex']);
 });
 
 test('ChatGPT: follows the visible branch of the message tree', () => {

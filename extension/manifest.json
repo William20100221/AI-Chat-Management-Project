@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Chat Manager",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Shows your claude.ai and chatgpt.com chats (titles, dates, and whether the AI is replying) in the AI Chat Manager app on this computer. Nothing leaves your computer.",
   "permissions": ["storage", "alarms"],
   "host_permissions": ["http://127.0.0.1/*"],

@@ -10,6 +10,10 @@
 //                  'task_complete' | 'turn_aborted' | '…_approval_request' …
 // Older Codex versions wrote the items without the { type, payload } wrapper; both are read.
 // Like the Claude readers, this is an undocumented format, read defensively.
+//
+// Since July 2026 the ChatGPT desktop app *is* the Codex app, so its "Work" and "Codex" chats are
+// these same files. session_meta.originator says which: "codex_work_desktop" (and other
+// "codex_work_…" names) for Work, anything else for Codex.
 
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -64,10 +68,53 @@ function approvalText(payload) {
   return 'Codex is waiting for your approval';
 }
 
+// Work chats vs Codex sessions, from session_meta.originator (or the threads table's column).
+function threadKind(originator) {
+  return /^(codex_work|chatgpt_cca)/i.test(String(originator || '')) ? 'work' : 'codex';
+}
+
+// Helper threads Codex starts by itself (sub-agents, approval reviews, memory, title writing).
+// The ChatGPT app doesn't list them, so neither do we.
+const BACKGROUND_THREAD_SOURCES = new Set(['subagent', 'guardian_review', 'memory_consolidation', 'system', 'thread_title']);
+function isBackgroundThread({ source, threadSource } = {}) {
+  if (threadSource && BACKGROUND_THREAD_SOURCES.has(String(threadSource))) return true;
+  const text = typeof source === 'string' ? source : source ? JSON.stringify(source) : '';
+  return /^\s*\{\s*"(subagent|sub_agent|internal)"/i.test(text);
+}
+
+// $CODEX_HOME/session_index.jsonl: one { id, thread_name, updated_at } per line, appended each time
+// a chat is named or renamed. The newest line for an id wins.
+async function readSessionIndex(file) {
+  const names = new Map();
+  let input;
+  try {
+    await fsp.access(file);
+    input = fs.createReadStream(file, { encoding: 'utf8' });
+  } catch {
+    return names;
+  }
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
+  for await (const raw of lines) {
+    try {
+      const entry = JSON.parse(raw);
+      if (entry && typeof entry.id === 'string' && typeof entry.thread_name === 'string') {
+        if (entry.thread_name.trim()) names.set(entry.id.toLowerCase(), entry.thread_name.trim());
+        else names.delete(entry.id.toLowerCase());
+      }
+    } catch {
+      // half-written line
+    }
+  }
+  return names;
+}
+
 function emptySummary() {
   return {
     sessionId: null,
     cwd: null,
+    originator: null,
+    source: null,
+    threadSource: null,
     createdAt: null,
     updatedAt: null,
     fromEvents: [], // messages from event_msg (preferred: exactly what you typed and saw)
@@ -104,8 +151,13 @@ function applyLine(s, line) {
   }
   const { kind, payload } = unwrap(line);
   if (kind === 'session_meta') {
+    // A resumed or forked session can repeat session_meta; the first one describes this file.
+    if (s.sessionId && payload.id && String(payload.id) !== s.sessionId) return;
     if (payload.id) s.sessionId = String(payload.id);
     if (payload.cwd) s.cwd = payload.cwd;
+    if (typeof payload.originator === 'string') s.originator = payload.originator;
+    if (payload.source !== undefined) s.source = payload.source;
+    if (typeof payload.thread_source === 'string') s.threadSource = payload.thread_source;
     const started = toMillis(payload.timestamp);
     if (started && (!s.createdAt || started < s.createdAt)) s.createdAt = started;
     return;
@@ -129,7 +181,12 @@ function applyLine(s, line) {
       s.pending = true;
     } else if (type === 'task_complete') {
       s.sawTaskEvents = true;
-      if (typeof payload.last_agent_message === 'string' && payload.last_agent_message) s.lastAssistantText = payload.last_agent_message;
+      if (typeof payload.last_agent_message === 'string' && payload.last_agent_message) {
+        s.lastAssistantText = payload.last_agent_message;
+        // The final answer, when no agent_message carried it.
+        const last = s.fromEvents[s.fromEvents.length - 1];
+        if (last && last.role === 'user') s.fromEvents.push({ role: 'assistant', text: snippet(payload.last_agent_message), at });
+      }
       finish(s, at);
     } else if (type === 'turn_aborted') {
       s.pending = false;
@@ -183,6 +240,8 @@ async function parseRollout(filePath) {
   return {
     sessionId: s.sessionId,
     cwd: s.cwd,
+    kind: threadKind(s.originator),
+    background: isBackgroundThread(s),
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
     title: questions[0] ? truncate(questions[0].text, 80) : null,
@@ -196,4 +255,4 @@ async function parseRollout(filePath) {
   };
 }
 
-module.exports = { codexHome, findRolloutFiles, parseRollout, applyLine, emptySummary };
+module.exports = { codexHome, findRolloutFiles, parseRollout, applyLine, emptySummary, threadKind, isBackgroundThread, readSessionIndex };

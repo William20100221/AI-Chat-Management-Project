@@ -21,8 +21,11 @@ const PLATFORMS = [
     name: 'ChatGPT',
     website: 'https://chatgpt.com/',
     websiteName: 'chatgpt.com',
+    // Chat: chatgpt.com and Chat mode in the app. Work and Codex: the ChatGPT app's other two modes
+    // (and the Codex CLI), which run on this computer.
     types: [
       { id: 'chat', name: 'Chat' },
+      { id: 'work', name: 'Work' },
       { id: 'codex', name: 'Codex' },
     ],
     chatUrl: (id) => `https://chatgpt.com/c/${id}`,

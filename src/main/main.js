@@ -269,6 +269,7 @@ function connections() {
     local: {
       found: foundLocal.length > 0,
       items: foundLocal.reduce((sum, s) => sum + s.count, 0),
+      apps: [...new Set(foundLocal.map((s) => s.app).filter(Boolean))],
       scanned: lastScanAt !== null,
     },
     extension: {
@@ -413,10 +414,16 @@ function registerIpc() {
 
   ipcMain.handle('item:open-chat', async (_e, id) => {
     const item = requireItem(id);
-    if (!item.url) return;
+    if (!item.url) return { ok: false };
+    try {
+      // https:// links open in the browser; codex://threads/<id> opens the ChatGPT app.
+      await shell.openExternal(item.url);
+    } catch {
+      return { ok: false, error: item.url.startsWith('codex:') ? 'Couldn’t open the ChatGPT app. Is it still installed?' : 'Couldn’t open the link' };
+    }
     store.markSeen([id]);
-    await shell.openExternal(item.url);
     pushSnapshot();
+    return { ok: true };
   });
 
   ipcMain.handle('item:open-folder', async (_e, id) => {

@@ -1,7 +1,7 @@
 {
   "name": "ai-chat-manager",
   "productName": "AI Chat Manager",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "A sticky note for your AI chats across platforms (Claude, ChatGPT): see which chats and sessions need you.",
   "private": true,
   "main": "src/main/main.js",
@@ -16,5 +16,8 @@
   "devDependencies": {
     "@electron/packager": "^20.3.0",
     "electron": "^44.4.5"
+  },
+  "engines": {
+    "node": ">=22.5"
   }
 }

@@ -6,7 +6,7 @@
 const backend = window.api; // "api" itself is taken: the bridge defines window.api as a global
 const icon = window.icon;
 
-const TYPE_ICONS = { chat: 'chat', cowork: 'cowork', code: 'code', codex: 'code' };
+const TYPE_ICONS = { chat: 'chat', cowork: 'cowork', code: 'code', work: 'cowork', codex: 'code' };
 const WORKING = new Set(['asking', 'responding', 'new-reply', 'pinned']);
 const WORKING_ORDER = { asking: 0, responding: 1, 'new-reply': 2, pinned: 3 };
 const WORKING_GROUPS = { asking: 'Asking you', responding: 'Replying now', 'new-reply': 'New replies', pinned: 'Pinned' };
@@ -540,7 +540,18 @@ function buildDetail(detail, item) {
       button(pinned ? 'Unpin' : 'Pin', { iconName: 'pin', kind: pinned ? 'active' : 'tonal', onClick: () => backend.mark(item.id, pinned ? 'auto' : 'pinned') }),
       button(done ? 'Not done' : 'Done', { iconName: 'taskAlt', kind: done ? 'active' : 'tonal', onClick: () => backend.mark(item.id, done ? 'auto' : 'done') }),
     );
-    if (detail.canOpenChat) actions.append(button(`Open in ${platformOf(about.platform).name}`, { iconName: 'openInNew', kind: 'outlined', onClick: () => backend.openChat(detail.id) }));
+    if (detail.canOpenChat) {
+      // Work and Codex chats open in the ChatGPT app; everything else on the website.
+      const where = about.source === 'work' || about.source === 'codex' ? 'ChatGPT app' : platformOf(about.platform).name;
+      actions.append(button(`Open in ${where}`, {
+        iconName: 'openInNew',
+        kind: 'outlined',
+        onClick: async () => {
+          const result = await backend.openChat(detail.id);
+          if (result && result.error) snackbar(result.error, 'error');
+        },
+      }));
+    }
     if (detail.canOpenFolder) actions.append(button('Folder', { iconName: 'folder', kind: 'outlined', onClick: () => backend.openFolder(detail.id) }));
     if (detail.resumeCommand) {
       actions.append(button('Copy resume command', {
@@ -727,7 +738,7 @@ function renderConnections() {
   let localText = 'Checking…';
   if (c.local.scanned) {
     localText = c.local.found
-      ? `Found · ${plural(c.local.items, 'session')}, updating live`
+      ? `Found ${(c.local.apps || []).join(', ') || 'AI apps'} · ${plural(c.local.items, 'session')}, updating live`
       : 'Not found. That’s fine: connect the AI websites below instead.';
   }
   $('#conn-local-state').textContent = localText;

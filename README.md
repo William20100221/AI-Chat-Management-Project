@@ -1,9 +1,9 @@
 # AI Chat Manager
 
-A sticky note for your AI chats, across AI platforms. It shows which chats and sessions need you right now, so you can pick up where you left off. Supported so far: **Claude** (chats, Cowork, Code) and **ChatGPT** (chats, Codex).
+A sticky note for your AI chats, across AI platforms. It shows which chats and sessions need you right now, so you can pick up where you left off. Supported so far: **Claude** (chats, Cowork, Code) and **ChatGPT** (chats, and the ChatGPT app's Work and Codex chats).
 
 - **Platforms:** the row under the tabs lists them: *All platforms · Claude · ChatGPT · More*.
-  - Click a platform to **go into it**: you see only its chats, plus its types (Claude: Chat · Cowork · Code; ChatGPT: Chat · Codex).
+  - Click a platform to **go into it**: you see only its chats, plus its types (Claude: Chat · Cowork · Code; ChatGPT: Chat · Work · Codex).
   - **← All platforms**, or the **Esc** key, takes you back.
   - **More** has a search box for finding a platform by name, useful as more platforms are added.
 - **Working** shows what needs you:
@@ -23,7 +23,7 @@ Everything stays on your computer. The app only **reads** files; it never change
 
 The app looks in two places, in this order (see **Settings → Connections**):
 
-1. **AI apps on this computer:** Claude Desktop (Cowork, Code tab), Claude Code in the terminal, and Codex. These are read straight from their files.
+1. **AI apps on this computer:** Claude Desktop (Cowork, Code tab), Claude Code in the terminal, the ChatGPT desktop app (Work and Codex), and the Codex CLI. These are read straight from their files.
 2. **AI websites:** claude.ai and chatgpt.com. If step 1 finds nothing, the app asks you to connect the browser extension, and uses it to get your chats from those sites. You can connect it alongside step 1 too.
 
 The app and the extension stay linked:
@@ -39,9 +39,22 @@ The extension never sends requests to those websites by itself. That would be au
 | Claude | **Code sessions** (Code tab and the `claude` terminal) | Claude Code's transcripts in `~/.claude/projects` | Live | ✅ |
 | Claude | **Chats on claude.ai** | The browser extension, while claude.ai is open | Live | ✅ |
 | Claude | **Older chats** | Your Claude data export | When you export again | — |
-| ChatGPT | **Codex sessions** | Codex's session files in `~/.codex/sessions` (or `$CODEX_HOME`) | Live | ✅ |
+| ChatGPT | **Work and Codex chats** (ChatGPT desktop app) | The app's chat list (`~/.codex/state_5.sqlite`) and session files (`~/.codex/sessions`) | Live | ✅ |
+| ChatGPT | **Codex CLI sessions** | The same session files in `~/.codex/sessions` (or `$CODEX_HOME`) | Live | ✅ |
 | ChatGPT | **Chats on chatgpt.com** | The browser extension, while chatgpt.com is open | Live | ✅ |
 | ChatGPT | **Older chats** | Your ChatGPT data export | When you export again | — |
+
+### The ChatGPT desktop app
+
+In July 2026 the Codex app became the new **ChatGPT desktop app**, with three modes: **Chat**, **Work** and **Codex**. The older app is now called **ChatGPT Classic**. What this app can read:
+
+- **Work and Codex chats:** yes, live. They run on your computer, and the ChatGPT app saves them in `~/.codex` (Windows: `%USERPROFILE%\.codex`). The app reads:
+  - its **chat list** (`state_5.sqlite`, table `threads`), for the titles and names the ChatGPT app shows, and for archived chats;
+  - the **session files** (`sessions\…\rollout-….jsonl`), for your questions, the replies, and whether it's replying or asking to run something.
+  - It reads a *copy* of the chat list, so it never locks the file or gets in the ChatGPT app's way.
+  - **Open in ChatGPT app** opens the chat there (through the app's `codex://threads/<id>` link).
+- **Chat-mode chats:** not from the app. They're ordinary ChatGPT chats, kept on OpenAI's servers; the desktop app downloads them each time and doesn't save them as files. They come from **chatgpt.com** in your browser (the extension), or from your **ChatGPT data export**. Either way they show under ChatGPT → Chat.
+- **ChatGPT Classic:** detected (Settings → Sources), but it has no chat files that can be read. On a Mac its cache is encrypted with a key in the Keychain. Its chats come from chatgpt.com or the export too.
 
 **How "replying" works:** Claude Code and Codex write every message to a session file. If the newest entry is your message or a tool step, the AI is still working. Once the turn ends (a normal final reply, or Codex's "task complete"), it's finished. A turn that goes quiet for 10 minutes counts as stopped. On the websites, the extension sees the reply stream start and end.
 
@@ -76,7 +89,12 @@ Each platform's newest export replaces that platform's older one; the other plat
 
 - **Claude Desktop (Windows):** Microsoft Store version at `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\`; regular installer at `%APPDATA%\Claude\`. Inside those, `local-agent-mode-sessions\` (Cowork) and `claude-code-sessions\` (Code tab). On a Mac: `~/Library/Application Support/Claude/`.
 - **Claude Code:** `~/.claude/projects/` (Windows: `%USERPROFILE%\.claude\projects`).
-- **Codex:** `~/.codex/sessions/YYYY/MM/DD/`, or under `$CODEX_HOME` if you set it.
+- **ChatGPT desktop app (new, with Work and Codex):** installed as the Microsoft Store package `%LOCALAPPDATA%\Packages\OpenAI.Codex_2p2nqsd0c76g0\` (the name stayed "Codex" after the rename). On a Mac: `/Applications/ChatGPT.app` (bundle id `com.openai.codex`). Its chats are in `~/.codex` (below).
+- **ChatGPT Classic:** Windows package `%LOCALAPPDATA%\Packages\OpenAI.ChatGPT-Desktop_*`; on a Mac, data in `~/Library/Application Support/com.openai.chat/` (encrypted).
+- **Codex (ChatGPT app and CLI):** `~/.codex/` (Windows: `%USERPROFILE%\.codex`), or `$CODEX_HOME` if you set it:
+  - `sessions/YYYY/MM/DD/rollout-…-<id>.jsonl` and `archived_sessions/`: every message;
+  - `state_5.sqlite` (or `$CODEX_SQLITE_HOME`, or `sqlite/state_5.sqlite`): the chat list;
+  - `session_index.jsonl`: names you gave chats.
 
 **Settings → Sources** shows what was found. These are internal files, not documented formats, so an update to those apps can change them.
 
@@ -103,7 +121,7 @@ Tools for trying the app out while it's being built. They're behind a password s
 
 | Tool | What it does |
 |---|---|
-| **Read AI apps' files on this computer** | On/off. Off hides Cowork, Code and Codex sessions, as if no AI apps were installed, so you can try the "connect the websites instead" flow. |
+| **Read AI apps' files on this computer** | On/off. Off hides Cowork, Code, Work and Codex sessions, as if no AI apps were installed, so you can try the "connect the websites instead" flow. |
 | **Import the Claude export from Downloads automatically** | On/off. The same setting as in Behaviour. |
 | **Receive chats from the browser extension** | On/off. While off, the extension keeps its updates, and its button says *Paused*. They arrive when you switch it back on. |
 | **Delete all stored data** | Click **Delete**, then **Click again to delete**. It forgets everything *this app* saved: imported and browser chats, pins, done marks and what you've seen. Leave *Also clear the browser extension's saved copy* ticked, or the extension sends it all back at its next check-in. Claude's own files are never touched. Settings and your password stay. |
@@ -136,7 +154,7 @@ Delete:
 
 ## Run it
 
-Needs [Node.js](https://nodejs.org) 20 or newer.
+Needs [Node.js](https://nodejs.org) 22.5 or newer (22 LTS or later), for its built-in SQLite reader.
 
 ```
 npm install
@@ -159,7 +177,8 @@ extension/       browser extension for claude.ai and chatgpt.com (Edge, Chrome, 
 src/core/        reading and combining the sources (no Electron code, fully tested)
   platforms.js       the platforms (Claude, ChatGPT): names, types, links
   chatgpt.js         ChatGPT chats (message trees) from its export or from chatgpt.com
-  codex.js           Codex session files on this computer
+  codex.js           Codex session files on this computer (ChatGPT app Work/Codex chats and the CLI)
+  chatgptApp.js      finds the ChatGPT desktop app and reads its chat list (a copy of state_5.sqlite)
   webChats.js        turns what the extension saw into chats, merged with the exports
   webBridge.js       the local-only receiver the extension talks to
   extensionLink.js   whether the extension is connected, and what the app asks it for
@@ -183,7 +202,7 @@ Icons are from [Material Icons](https://fonts.google.com/icons) (Apache License 
 ## Not done yet
 
 - **More platforms:** Gemini, Microsoft Copilot, Perplexity, DeepSeek and others. See "Adding another platform" above.
-- **Chats inside the desktop apps' own windows** (the Claude Desktop and ChatGPT desktop apps). The extension only sees the websites in your browser, and the desktop apps keep their chats on the companies' servers, or encrypted.
-- Knowing when you read a Cowork, Code or Codex reply inside that app itself.
-- Opening a Cowork task or a Code or Codex session directly in its app. For now: **Copy resume command** and **Folder**. Chats open on the website.
+- **Plain chats inside the desktop apps' own windows** (Claude Desktop's chats, ChatGPT's Chat mode). The extension only sees the websites in your browser, and the desktop apps keep those chats on the companies' servers, or encrypted. Use the website or the export for them.
+- Knowing when you read a Cowork, Code, Work or Codex reply inside that app itself.
+- Opening a Cowork task or a Code session directly in Claude Desktop. For now: **Copy resume command** and **Folder**. (Work and Codex chats do open in the ChatGPT app.)
 - App icon, installer, start with Windows, desktop notifications, Mac and Linux builds.
