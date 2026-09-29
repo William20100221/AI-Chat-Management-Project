@@ -156,15 +156,31 @@ function renderBanner() {
   } else if (pending && pending.opened) {
     const text = el('p', null, 'Downloading your chats in the browser… they’ll appear here as soon as the zip lands in Downloads.');
     nodes.push(text, button('Dismiss', { kind: 'text', onClick: () => backend.dismissExport() }));
+  } else if (needsWebsite()) {
+    // Step 1 found nothing on this computer, so the website (through the extension) is the way in.
+    const ext = snap.connections.extension;
+    const text = el('p');
+    if (ext.everConnected) {
+      text.append(el('strong', null, 'The browser extension isn’t connected. '), 'Open your browser or claude.ai and it reconnects within a minute.');
+    } else {
+      text.append(el('strong', null, 'No Claude app found on this computer. '), 'Connect your browser to see your claude.ai chats here.');
+    }
+    const actions = el('div', 'banner-actions');
+    actions.append(button(ext.everConnected ? 'Open claude.ai' : 'Connect', {
+      kind: 'filled',
+      iconName: ext.everConnected ? 'openInNew' : undefined,
+      onClick: () => (ext.everConnected ? backend.openClaudeWebsite() : openSettings('connections')),
+    }));
+    nodes.push(text, actions);
   } else if (showsChats && !snap.items.some((i) => i.source === 'chat') && !hintDismissed()) {
     const text = el('p');
     text.append(
-      el('strong', null, 'Normal chats aren’t here yet. '),
-      'Add the browser extension to see your claude.ai chats live, or import your data export for older ones.',
+      el('strong', null, 'Want your claude.ai chats here too? '),
+      'Connect the browser extension to see them live, or import your data export for older ones.',
     );
     const actions = el('div', 'banner-actions');
     actions.append(
-      button('How to', { kind: 'filled', onClick: () => { renderSettings(); $('#settings').showModal(); } }),
+      button('Connect', { kind: 'filled', onClick: () => openSettings('connections') }),
       button('Hide', { kind: 'text', onClick: () => { dismissHint(); renderBanner(); } }),
     );
     nodes.push(text, actions);
@@ -172,6 +188,11 @@ function renderBanner() {
 
   banner.replaceChildren(...nodes);
   banner.hidden = nodes.length === 0;
+}
+
+function needsWebsite() {
+  const c = snap.connections;
+  return Boolean(c && c.local.scanned && !c.local.found && !c.extension.connected);
 }
 
 function hintDismissed() {
@@ -284,6 +305,8 @@ function renderStatus() {
   } else {
     parts.push('no chats yet');
   }
+  const ext = snap.connections && snap.connections.extension;
+  if (ext && ext.connected) parts.push(`claude.ai linked (${ext.browser || 'browser'})`);
   $('#status-text').textContent = parts.join('  ·  ');
 }
 
@@ -518,8 +541,68 @@ function renderSources() {
   );
 }
 
+function stepMark(li, number, ok) {
+  li.classList.toggle('ok', ok);
+  li.querySelector('.conn-step').replaceChildren(ok ? icon('check') : document.createTextNode(number));
+}
+
+function renderConnections() {
+  const c = snap.connections;
+  if (!c) return;
+
+  stepMark($('#conn-local'), '1', c.local.found);
+  let localText = 'Checking…';
+  if (c.local.scanned) {
+    localText = c.local.found
+      ? `Found · ${plural(c.local.items, 'Cowork task or Code session')}, updating live`
+      : 'Not found. That’s fine: connect claude.ai below instead.';
+  }
+  $('#conn-local-state').textContent = localText;
+
+  const ext = c.extension;
+  stepMark($('#conn-web'), '2', ext.connected);
+  const state = $('#conn-web-state');
+  if (!ext.listening) {
+    state.textContent = ext.error ? `Can't wait for the extension: ${ext.error}` : 'Starting…';
+  } else if (ext.connected) {
+    state.textContent = `Connected in ${ext.browser || 'your browser'} · ${plural(ext.chats, 'chat')} seen`;
+  } else if (ext.everConnected) {
+    state.textContent = `Not connected right now (last seen ${relative(ext.lastSeenAt)}). Is your browser open?`;
+  } else {
+    const waiting = el('span', 'waiting');
+    waiting.append(el('span', 'spinner'), 'Waiting for the extension…');
+    state.replaceChildren(waiting);
+  }
+
+  const actions = [];
+  if (ext.everConnected) {
+    actions.push(
+      button('Open claude.ai', { iconName: 'openInNew', onClick: () => backend.openClaudeWebsite() }),
+      button('Get everything again', {
+        kind: 'text',
+        iconName: 'refresh',
+        onClick: async () => {
+          await backend.resyncExtension();
+          snackbar('Asked the extension to send everything it has seen (within a minute).');
+        },
+      }),
+    );
+  }
+  actions.push(button('Open extension folder', { kind: ext.everConnected ? 'text' : 'tonal', iconName: 'folder', onClick: () => backend.openExtensionFolder() }));
+  $('#conn-web-actions').replaceChildren(...actions);
+  $('#conn-web-setup').hidden = ext.connected;
+}
+
+function openSettings(section) {
+  renderSettings();
+  const dialog = $('#settings');
+  if (!dialog.open) dialog.showModal();
+  if (section === 'connections') $('#connections-heading').scrollIntoView({ block: 'start' });
+}
+
 function renderSettings() {
   const s = snap.settings;
+  renderConnections();
   for (const b of document.querySelectorAll('#mode-buttons button')) b.classList.toggle('selected', b.dataset.mode === s.themeMode);
   for (const b of document.querySelectorAll('#color-swatches button')) b.classList.toggle('selected', b.dataset.color === s.themeColor);
   $('#recent-days').value = s.recentDays;
@@ -582,12 +665,7 @@ function wire() {
 
   $('#toggle-compact').addEventListener('click', () => backend.updateSettings({ compact: !snap.settings.compact }));
 
-  $('#open-extension-folder').addEventListener('click', () => backend.openExtensionFolder());
-
-  $('#open-settings').addEventListener('click', () => {
-    renderSettings();
-    $('#settings').showModal();
-  });
+  $('#open-settings').addEventListener('click', () => openSettings());
 
   for (const b of document.querySelectorAll('#mode-buttons button')) {
     b.addEventListener('click', () => backend.updateSettings({ themeMode: b.dataset.mode }));

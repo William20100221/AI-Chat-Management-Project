@@ -693,6 +693,52 @@ button {
 
 .steps li { margin-bottom: 6px; }
 
+.help.small { font-size: 12px; }
+
+.connections {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.connection {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--surface-container);
+}
+
+.conn-step {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-container-highest);
+  color: var(--on-surface-variant);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.connection.ok .conn-step { background: var(--primary); color: var(--on-primary); }
+.connection.ok .conn-step .icon { width: 18px; height: 18px; }
+.conn-title { font-weight: 600; }
+.conn-state { color: var(--on-surface-variant); font-size: 13px; margin-top: 2px; }
+.connection.ok .conn-state { color: var(--primary); }
+.conn-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.conn-actions:empty { display: none; }
+#conn-web-setup .steps { margin-top: 12px; }
+
+.waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .sources {
   list-style: none;
   margin: 0;
@@ -791,3 +837,5 @@ button {
   .banner { margin: 4px 4px 8px; padding: 10px 12px; font-size: 13px; }
   .status-bar { padding: 4px 16px 6px; }
 }
+
+.field .segmented { align-self: flex-start; }

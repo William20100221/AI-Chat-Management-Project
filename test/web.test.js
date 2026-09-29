@@ -7,6 +7,7 @@ const http = require('http');
 const { emptyWebState, applyWebEvents, combineChats } = require('../src/core/webChats');
 const { startBridge } = require('../src/core/webBridge');
 const { itemState } = require('../src/core/status');
+const { ExtensionLink, CONNECTED_WINDOW } = require('../src/core/extensionLink');
 
 const A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
 const B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
@@ -119,17 +120,28 @@ function request(port, { method = 'POST', path = '/v1/events', headers = {}, bod
 test('bridge: accepts the extension, rejects websites', async () => {
   const received = [];
   let server;
+  let lastClient = null;
   const port = await new Promise((resolve) => {
-    server = startBridge({ port: 0, onEvents: (events) => received.push(...events), onStatus: (s) => s.listening && resolve(s.port) });
+    server = startBridge({
+      port: 0,
+      onEvents: (events, { client }) => {
+        received.push(...events);
+        lastClient = client;
+        return { requests: ['resync'] };
+      },
+      onStatus: (s) => s.listening && resolve(s.port),
+    });
   });
   const host = `127.0.0.1:${port}`;
-  const payload = JSON.stringify({ events: [{ type: 'viewing', uuid: A, at: T }] });
+  const payload = JSON.stringify({ client: { version: '0.3.0', browser: 'Microsoft Edge' }, events: [{ type: 'viewing', uuid: A, at: T }] });
   const good = { Host: host, 'Content-Type': 'application/json', 'X-AI-Chat-Manager': '1' };
 
   try {
     const fromExtension = await request(port, { headers: { ...good, Origin: 'chrome-extension://abcdefghijklmnop' }, body: payload });
     assert.equal(fromExtension.status, 200);
     assert.equal(fromExtension.headers['access-control-allow-origin'], 'chrome-extension://abcdefghijklmnop');
+    assert.deepEqual(fromExtension.body.requests, ['resync'], "the app's requests travel back in the answer");
+    assert.equal(lastClient.browser, 'Microsoft Edge');
 
     assert.equal((await request(port, { headers: { ...good, Origin: 'moz-extension://1234-abcd' }, body: payload })).status, 200);
     assert.equal(received.length, 2);
@@ -144,4 +156,25 @@ test('bridge: accepts the extension, rejects websites', async () => {
   } finally {
     server.close();
   }
+});
+
+test('extension link: connected status, and one "send everything" request per app start', () => {
+  const link = new ExtensionLink();
+  assert.equal(link.status(T).connected, false);
+  assert.equal(link.status(T).everConnected, false);
+
+  assert.deepEqual(link.contact({ version: '0.3.0', browser: 'Microsoft Edge' }, T), { requests: ['resync'] });
+  assert.deepEqual(link.contact({}, T + 60000), { requests: [] }, 'only asked once');
+  const status = link.status(T + 60000);
+  assert.equal(status.connected, true);
+  assert.equal(status.browser, 'Microsoft Edge', 'kept from the earlier check-in');
+
+  assert.equal(link.status(T + 60000 + CONNECTED_WINDOW + 1).connected, false, 'no check-ins for 3 minutes: disconnected');
+
+  link.requestResync(); // the "Get everything again" button
+  assert.deepEqual(link.contact({}, T + 120000).requests, ['resync']);
+
+  const restarted = new ExtensionLink(link.info); // saved info survives an app restart
+  assert.equal(restarted.status(T + 120000).everConnected, true);
+  assert.deepEqual(restarted.contact({}, T + 130000).requests, ['resync'], 'a new app start asks again');
 });

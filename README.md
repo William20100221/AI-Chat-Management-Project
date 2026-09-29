@@ -16,6 +16,18 @@ Everything stays on your computer. The app only **reads** files; it never change
 
 ## Where the data comes from
 
+The app looks for Claude in two places, in this order (see **Settings → Connections**):
+
+1. **Claude on this computer.** Claude Desktop's Cowork tasks and Code sessions, and Claude Code in the terminal. These are read straight from their files.
+2. **Claude website (claude.ai).** If step 1 finds nothing, the app asks you to connect the browser extension, and uses it to get your claude.ai chats. You can connect it alongside step 1 too.
+
+The app and the extension stay linked:
+- The extension checks in every minute, so the app shows whether it's connected and in which browser.
+- The app can ask the extension to **send everything it has seen** again. It does this once each time it starts, or when you press *Get everything again*.
+- **Open claude.ai** opens your chat list in the browser, so the extension can pick it up.
+
+The extension never sends requests to claude.ai by itself. That would be automated access to your account. It only reads what claude.ai loads while it's open.
+
 | Source | How it gets in | Updates | "Replying" / "New reply" |
 |---|---|---|---|
 | **Cowork tasks** (Claude Desktop) | Read from Claude Desktop's session files | Automatically, within about a second | ✅ |
@@ -33,7 +45,7 @@ Normal chats live on Anthropic's servers, not on your computer. The `extension/`
 
 - **What it reads:** it only reads the responses your claude.ai tab already loads (your chat list, the chat you open, each reply as it streams). It sends no requests of its own and doesn't change the page.
 - **Where the data goes:** only to this app, on `127.0.0.1:48653` (your own computer). The app refuses anything that isn't a browser extension, including websites.
-- **When the app is closed:** the extension keeps the latest updates and delivers them once the app runs again.
+- **When the app is closed:** the extension keeps the latest updates and delivers them once the app runs again. It also keeps a copy of the latest data per chat, so a reinstalled app can get everything back.
 - **Seen:** a reply counts as seen once you've had that chat open in a visible, focused tab, or opened it in this app.
 
 Install:
@@ -82,10 +94,11 @@ Electron, plain HTML/CSS/JavaScript, no framework and no build step.
 extension/       browser extension for claude.ai (Edge, Chrome, Firefox)
   page-hook.js       runs inside claude.ai and notices the chat data and replies the page loads
   relay.js           passes that on, and notes which chat you're looking at
-  background.js      delivers it to the app on 127.0.0.1, keeping it while the app is closed
+  background.js      delivers it to the app on 127.0.0.1, checks in every minute, keeps it while the app is closed
 src/core/        reading and combining the sources (no Electron code, fully tested)
   webChats.js        turns what the extension saw into chats, merged with the export
   webBridge.js       the local-only receiver the extension talks to
+  extensionLink.js   whether the extension is connected, and what the app asks it for
   paths.js           where Claude keeps its files
   desktopSessions.js Claude Desktop session records (Cowork and Code tab)
   transcript.js      Claude Code .jsonl transcripts: titles, questions, first/last message, reply in progress

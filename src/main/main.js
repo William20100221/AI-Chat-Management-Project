@@ -9,6 +9,7 @@ const { itemState } = require('../core/status');
 const { readExportFile, findCandidateFiles, mightBeClaudeExport } = require('../core/chatExport');
 const { applyWebEvents, combineChats } = require('../core/webChats');
 const { startBridge } = require('../core/webBridge');
+const { ExtensionLink } = require('../core/extensionLink');
 
 const RESCAN_EVERY_MS = 30 * 1000;
 const WINDOW_SIZES = {
@@ -27,6 +28,7 @@ let scanQueued = false;
 const watchers = new Map(); // watched path → fs.FSWatcher
 let downloadsWatcher = null;
 let bridge = { listening: false, error: null };
+let link = null; // the browser extension: connected or not, and what we want from it
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -57,6 +59,7 @@ function snapshot() {
       ? { createdAt: store.data.pendingExport.createdAt, opened: Boolean(store.data.pendingExport.openedAt) }
       : null,
     lastScanAt,
+    connections: connections(),
   };
 }
 
@@ -204,14 +207,16 @@ function extensionFolder() {
 function browserSource() {
   const web = store.data.web;
   const count = Object.keys(web.chats).length;
+  const ext = link.status();
   let note;
   if (!bridge.listening) note = bridge.error ? `Can't listen for the extension: ${bridge.error}` : 'Starting…';
-  else if (!web.lastEventAt) note = 'Waiting for the browser extension (see "Get live claude.ai chats" above)';
-  else note = `${count} chat${count === 1 ? '' : 's'} seen · last update ${new Date(web.lastEventAt).toLocaleString()}`;
+  else if (ext.connected) note = `Connected (${ext.browser || 'browser'}) · ${count} chat${count === 1 ? '' : 's'} seen`;
+  else if (ext.everConnected) note = `Not connected right now · last seen ${new Date(ext.lastSeenAt).toLocaleString()}`;
+  else note = 'Not connected yet';
   return {
     label: 'Claude in your browser – extension',
     path: null,
-    found: Boolean(web.lastEventAt),
+    found: ext.everConnected,
     count,
     errors: bridge.error ? 1 : 0,
     lastError: bridge.error,
@@ -219,11 +224,39 @@ function browserSource() {
   };
 }
 
-function onBrowserEvents(events) {
+// Where Claude was found: on this computer first, then the website through the extension.
+function connections() {
+  const local = sources.filter((s) => s.path && s.label.startsWith('Claude'));
+  const foundLocal = local.filter((s) => s.found);
+  const ext = link.status();
+  return {
+    local: {
+      found: foundLocal.length > 0,
+      items: foundLocal.reduce((sum, s) => sum + s.count, 0),
+      scanned: lastScanAt !== null,
+    },
+    extension: {
+      listening: bridge.listening,
+      error: bridge.error,
+      connected: ext.connected,
+      everConnected: ext.everConnected,
+      browser: ext.browser || null,
+      lastSeenAt: ext.lastSeenAt || null,
+      chats: Object.keys(store.data.web.chats).length,
+    },
+  };
+}
+
+function onBrowserEvents(events, { client }) {
+  const wasConnected = link.status().connected;
+  const answer = link.contact(client);
+  store.data.web.extension = link.info;
   const { seen } = applyWebEvents(store.data.web, events);
   for (const { id, at } of seen) store.data.seen[id] = Math.max(store.data.seen[id] || 0, at);
   store.save();
-  rescanSoon();
+  if (!wasConnected) send('notice', { kind: 'ok', text: `Connected to the extension in ${link.info.browser || 'your browser'}` });
+  if (events.length || !wasConnected) rescanSoon();
+  return answer;
 }
 
 function startBrowserBridge() {
@@ -417,6 +450,15 @@ function registerIpc() {
     checkDownloads();
   });
 
+  // Opens your chat list on claude.ai in the browser; the extension picks it up from there.
+  ipcMain.handle('extension:open-claude', async () => {
+    await shell.openExternal('https://claude.ai/recents');
+  });
+
+  ipcMain.handle('extension:resync', () => {
+    link.requestResync();
+  });
+
   ipcMain.handle('extension:open-folder', async () => {
     const folder = extensionFolder();
     if (fs.existsSync(folder)) await shell.openPath(folder);
@@ -464,6 +506,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     store = new Store(path.join(app.getPath('userData'), 'state.json'));
+    link = new ExtensionLink(store.data.web.extension);
     applyTheme();
     Menu.setApplicationMenu(null);
     registerIpc();

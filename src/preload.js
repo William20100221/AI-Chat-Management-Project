@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('api', {
   refresh: () => ipcRenderer.invoke('scan:refresh'),
   openSource: (index) => ipcRenderer.invoke('source:open', index),
   openExtensionFolder: () => ipcRenderer.invoke('extension:open-folder'),
+  openClaudeWebsite: () => ipcRenderer.invoke('extension:open-claude'),
+  resyncExtension: () => ipcRenderer.invoke('extension:resync'),
   onSnapshot: (callback) => ipcRenderer.on('snapshot', (_event, value) => callback(value)),
   onNotice: (callback) => ipcRenderer.on('notice', (_event, value) => callback(value)),
 });

@@ -1,7 +1,7 @@
 {
   "name": "ai-chat-manager",
   "productName": "AI Chat Manager",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A sticky note for your AI chats: see which Claude chats, Cowork tasks and Code sessions you've been working on.",
   "private": true,
   "main": "src/main/main.js",

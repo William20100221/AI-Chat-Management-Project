@@ -53,19 +53,22 @@ function startBridge({ port = PORT, onEvents, onStatus = () => {} }) {
     });
     req.on('end', () => {
       if (size > MAX_BODY_BYTES) return;
-      let events;
+      let message;
       try {
-        events = JSON.parse(Buffer.concat(chunks).toString('utf8')).events;
+        message = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       } catch {
         return reply(400, { error: 'bad json' });
       }
+      const events = message && message.events;
       if (!Array.isArray(events)) return reply(400, { error: 'no events' });
+      let answer;
       try {
-        onEvents(events, origin || null);
+        // The handler's answer (e.g. { requests: ['resync'] }) goes back to the extension.
+        answer = onEvents(events, { origin: origin || null, client: message.client || {} }) || {};
       } catch (err) {
         return reply(500, { error: err.message });
       }
-      return reply(200, { ok: true, received: events.length });
+      return reply(200, { ok: true, received: events.length, ...answer });
     });
   });
 

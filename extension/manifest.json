@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Chat Manager for Claude",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Shows your claude.ai chats (titles, dates, and whether Claude is replying) in the AI Chat Manager app on this computer. Nothing leaves your computer.",
   "permissions": ["storage", "alarms"],
   "host_permissions": ["http://127.0.0.1/*"],

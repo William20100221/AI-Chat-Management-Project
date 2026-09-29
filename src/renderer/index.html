@@ -57,6 +57,34 @@
     <form method="dialog">
       <h2>Settings</h2>
 
+      <h3 id="connections-heading">Connections</h3>
+      <p class="help">The app looks for Claude on this computer first. For claude.ai in your browser, it links to a small browser extension.</p>
+      <ol class="connections">
+        <li class="connection" id="conn-local">
+          <span class="conn-step">1</span>
+          <div class="conn-body">
+            <div class="conn-title">Claude on this computer</div>
+            <div class="conn-state" id="conn-local-state">Checking…</div>
+          </div>
+        </li>
+        <li class="connection" id="conn-web">
+          <span class="conn-step">2</span>
+          <div class="conn-body">
+            <div class="conn-title">Claude website (claude.ai)</div>
+            <div class="conn-state" id="conn-web-state">Checking…</div>
+            <div class="conn-actions" id="conn-web-actions"></div>
+            <div id="conn-web-setup">
+              <ol class="steps">
+                <li><strong>Edge or Chrome:</strong> open <span class="mono">edge://extensions</span> (or <span class="mono">chrome://extensions</span>), turn on <em>Developer mode</em>, click <em>Load unpacked</em> and choose the extension folder.</li>
+                <li><strong>Firefox:</strong> open <span class="mono">about:debugging#/runtime/this-firefox</span>, click <em>Load Temporary Add-on</em> and choose <span class="mono">manifest.json</span> in the extension folder. (Firefox removes it when it restarts.)</li>
+                <li>Open claude.ai (or reload it). This turns green within a minute.</li>
+              </ol>
+              <p class="help small">The extension only reads what your claude.ai tab already loaded, and sends it to this app on your computer, nowhere else.</p>
+            </div>
+          </div>
+        </li>
+      </ol>
+
       <h3>Appearance</h3>
       <div class="field">
         <span class="field-label">Mode</span>
@@ -92,15 +120,6 @@
         <span>Import my Claude data export automatically from Downloads</span>
         <input id="watch-downloads" type="checkbox" class="switch">
       </label>
-
-      <h3>Get live claude.ai chats</h3>
-      <p class="help">Install the small browser extension that comes with this app. While claude.ai is open in your browser, your chats (titles, dates, and whether Claude is replying) show up here live. It only reads what the page already loaded and sends it to this app on your computer, nowhere else.</p>
-      <ol class="steps">
-        <li><strong>Edge or Chrome:</strong> open <span class="mono">edge://extensions</span> (or <span class="mono">chrome://extensions</span>), turn on <em>Developer mode</em>, click <em>Load unpacked</em> and choose the extension folder.</li>
-        <li><strong>Firefox:</strong> open <span class="mono">about:debugging#/runtime/this-firefox</span>, click <em>Load Temporary Add-on</em> and choose <span class="mono">manifest.json</span> in the extension folder. (Firefox removes it when it restarts.)</li>
-        <li>Reload any open claude.ai tabs.</li>
-      </ol>
-      <button type="button" id="open-extension-folder" class="button tonal small"><span data-icon="folder"></span>Open extension folder</button>
 
       <h3>Chat history</h3>
       <p class="help">For chats from before you installed the extension, use your data export: in Claude go to <strong>Settings → Privacy → Export data</strong> and download the file from the email. This app spots it in Downloads and helps you fetch your chats.</p>
