@@ -156,13 +156,18 @@ function renderBanner() {
   } else if (pending && pending.opened) {
     const text = el('p', null, 'Downloading your chats in the browser… they’ll appear here as soon as the zip lands in Downloads.');
     nodes.push(text, button('Dismiss', { kind: 'text', onClick: () => backend.dismissExport() }));
-  } else if (showsChats && !snap.lastImport && !hintDismissed()) {
+  } else if (showsChats && !snap.items.some((i) => i.source === 'chat') && !hintDismissed()) {
     const text = el('p');
     text.append(
       el('strong', null, 'Normal chats aren’t here yet. '),
-      'In Claude: Settings → Privacy → Export data, then download the file from the email.',
+      'Add the browser extension to see your claude.ai chats live, or import your data export for older ones.',
     );
-    nodes.push(text, button('Hide', { kind: 'text', onClick: () => { dismissHint(); renderBanner(); } }));
+    const actions = el('div', 'banner-actions');
+    actions.append(
+      button('How to', { kind: 'filled', onClick: () => { renderSettings(); $('#settings').showModal(); } }),
+      button('Hide', { kind: 'text', onClick: () => { dismissHint(); renderBanner(); } }),
+    );
+    nodes.push(text, actions);
   }
 
   banner.replaceChildren(...nodes);
@@ -273,7 +278,12 @@ function renderStatus() {
   const parts = [];
   if (replying) parts.push(`${replying} replying now`);
   parts.push(plural(bySource.cowork, 'Cowork task'), plural(bySource.code, 'Code session'));
-  parts.push(snap.lastImport ? `${plural(bySource.chat, 'chat')} (export ${dateText(snap.lastImport.fileMtime || snap.lastImport.importedAt)})` : 'no chat export yet');
+  if (bySource.chat) {
+    const from = snap.lastImport ? `export ${dateText(snap.lastImport.fileMtime || snap.lastImport.importedAt)} + browser` : 'from your browser';
+    parts.push(`${plural(bySource.chat, 'chat')} (${from})`);
+  } else {
+    parts.push('no chats yet');
+  }
   $('#status-text').textContent = parts.join('  ·  ');
 }
 
@@ -490,13 +500,14 @@ function renderSources() {
       const li = el('li');
       li.append(el('span', 'source-label', source.label));
       let stateText;
-      if (!source.found) stateText = source.path ? 'Not found on this computer' : 'Nothing imported yet';
+      if (!source.found) stateText = source.path ? 'Not found on this computer' : 'Nothing yet';
       else stateText = plural(source.count, 'item');
       if (source.errors) stateText += ` · ${plural(source.errors, 'file')} couldn’t be read`;
       li.append(el('span', `source-state${source.errors ? ' bad' : ''}`, stateText));
       if (source.path) li.append(el('span', 'source-path mono', source.path));
+      if (source.note) li.append(el('span', 'source-path', source.note));
       if (source.fields && source.fields.length) li.append(el('span', 'source-path', `Fields: ${source.fields.join(', ')}`));
-      if (source.lastError) li.append(el('span', 'source-path', `Last error: ${source.lastError}`));
+      if (source.lastError && source.lastError !== source.note) li.append(el('span', 'source-path', `Last error: ${source.lastError}`));
       if (source.path && source.found) {
         const openButton = button('Open folder', { kind: 'text', iconName: 'folder', onClick: () => backend.openSource(index) });
         openButton.classList.add('source-open');
@@ -570,6 +581,8 @@ function wire() {
   });
 
   $('#toggle-compact').addEventListener('click', () => backend.updateSettings({ compact: !snap.settings.compact }));
+
+  $('#open-extension-folder').addEventListener('click', () => backend.openExtensionFolder());
 
   $('#open-settings').addEventListener('click', () => {
     renderSettings();

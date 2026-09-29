@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { emptyWebState } = require('./webChats');
 
 const THEME_MODES = ['system', 'light', 'dark'];
 const THEME_COLORS = ['indigo', 'teal', 'green', 'amber', 'rose', 'violet', 'graphite'];
@@ -26,6 +27,7 @@ function defaults() {
     seen: {}, // item id → when you last looked at it
     installedAt: Date.now(), // replies finished before this count as already seen
     chats: [], // chats from your Claude data export
+    web: emptyWebState(), // chats seen live in your claude.ai browser tab (browser extension)
     lastImport: null, // { file, fileMtime, importedAt, count }
     pendingExport: null, // download links from an export manifest you haven't used yet
     seenFiles: {}, // files in Downloads we already looked at
@@ -49,6 +51,7 @@ class Store {
         ...saved,
         settings,
         seenFiles: saved.seenFiles || saved.seenZips || {},
+        web: { ...emptyWebState(), ...(saved.web || {}) },
       };
       delete this.data.seenZips;
     } catch {
@@ -100,9 +103,8 @@ class Store {
     return Math.max(this.data.seen[id] || 0, this.data.installedAt || 0);
   }
 
-  markSeen(ids) {
-    const now = Date.now();
-    for (const id of ids) this.data.seen[id] = now;
+  markSeen(ids, at = Date.now()) {
+    for (const id of ids) this.data.seen[id] = Math.max(this.data.seen[id] || 0, at);
     this.save();
   }
 

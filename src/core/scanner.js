@@ -131,7 +131,7 @@ class Scanner {
     }
 
     sources.push({
-      label: 'Claude chats – from your data export',
+      label: 'Claude chats – export and browser',
       path: null,
       found: importedChats.length > 0,
       count: importedChats.length,
@@ -216,7 +216,7 @@ function chatItem(chat) {
     folder: null,
     resumeId: null,
     url: /^[0-9a-f-]{8,}$/i.test(chat.uuid) ? `https://claude.ai/chat/${chat.uuid}` : null,
-    activity: null, // the export is a snapshot: no live state for normal chats yet
+    activity: chat.activity || null, // live only when the browser extension saw it
     claudeUnread: null,
     claudeReadAt: null,
     ...detail(chat.questions, chat.firstMessage, chat.lastMessage),

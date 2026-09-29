@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AI Chat Manager</title>
+  <style>
+    :root { color-scheme: light dark; --ok: #1b7f4b; --warn: #b3261e; }
+    body { width: 280px; margin: 0; padding: 16px; font: 14px/20px "Segoe UI", system-ui, sans-serif; }
+    h1 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+    .state { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); flex: none; }
+    .ok .dot { background: var(--ok); }
+    p { margin: 6px 0; opacity: 0.8; font-size: 13px; }
+    button { margin-top: 8px; padding: 6px 14px; border-radius: 16px; border: 1px solid currentColor; background: none; color: inherit; font: inherit; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>AI Chat Manager</h1>
+  <div id="state" class="state"><span class="dot"></span><span id="state-text">Checking…</span></div>
+  <p id="detail"></p>
+  <p>Open claude.ai and your chats show up in the app. Nothing leaves your computer.</p>
+  <button id="send">Send now</button>
+  <script src="popup.js"></script>
+</body>
+</html>

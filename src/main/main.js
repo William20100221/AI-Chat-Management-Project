@@ -7,6 +7,8 @@ const { Scanner } = require('../core/scanner');
 const { Store } = require('../core/store');
 const { itemState } = require('../core/status');
 const { readExportFile, findCandidateFiles, mightBeClaudeExport } = require('../core/chatExport');
+const { applyWebEvents, combineChats } = require('../core/webChats');
+const { startBridge } = require('../core/webBridge');
 
 const RESCAN_EVERY_MS = 30 * 1000;
 const WINDOW_SIZES = {
@@ -24,6 +26,7 @@ let scanning = null;
 let scanQueued = false;
 const watchers = new Map(); // watched path → fs.FSWatcher
 let downloadsWatcher = null;
+let bridge = { listening: false, error: null };
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -47,7 +50,7 @@ function snapshot() {
   });
   return {
     items: list,
-    sources: sources.map(({ label, path: p, found, count, errors, lastError, fields }) => ({ label, path: p, found, count, errors, lastError, fields })),
+    sources: [...sources, browserSource()].map(({ label, path: p, found, count, errors, lastError, fields, note }) => ({ label, path: p, found, count, errors, lastError, fields, note })),
     settings: store.settings,
     lastImport: store.data.lastImport,
     pendingExport: store.data.pendingExport
@@ -69,7 +72,7 @@ async function rescan() {
   }
   scanning = (async () => {
     try {
-      const result = await scanner.scan(store.data.chats);
+      const result = await scanner.scan(combineChats(store.data.chats, store.data.web));
       items = new Map(result.items.map((item) => [item.id, item]));
       sources = result.sources;
       lastScanAt = Date.now();
@@ -190,6 +193,47 @@ function watchDownloads() {
   } catch {
     // the periodic check still runs
   }
+}
+
+// ---- claude.ai in the browser (via the browser extension) ----
+
+function extensionFolder() {
+  return app.isPackaged ? path.join(process.resourcesPath, 'extension') : path.join(app.getAppPath(), 'extension');
+}
+
+function browserSource() {
+  const web = store.data.web;
+  const count = Object.keys(web.chats).length;
+  let note;
+  if (!bridge.listening) note = bridge.error ? `Can't listen for the extension: ${bridge.error}` : 'Starting…';
+  else if (!web.lastEventAt) note = 'Waiting for the browser extension (see "Get live claude.ai chats" above)';
+  else note = `${count} chat${count === 1 ? '' : 's'} seen · last update ${new Date(web.lastEventAt).toLocaleString()}`;
+  return {
+    label: 'Claude in your browser – extension',
+    path: null,
+    found: Boolean(web.lastEventAt),
+    count,
+    errors: bridge.error ? 1 : 0,
+    lastError: bridge.error,
+    note,
+  };
+}
+
+function onBrowserEvents(events) {
+  const { seen } = applyWebEvents(store.data.web, events);
+  for (const { id, at } of seen) store.data.seen[id] = Math.max(store.data.seen[id] || 0, at);
+  store.save();
+  rescanSoon();
+}
+
+function startBrowserBridge() {
+  startBridge({
+    onEvents: onBrowserEvents,
+    onStatus: (status) => {
+      bridge = status;
+      pushSnapshot();
+    },
+  });
 }
 
 // ---- window: full / compact, theme ----
@@ -373,6 +417,11 @@ function registerIpc() {
     checkDownloads();
   });
 
+  ipcMain.handle('extension:open-folder', async () => {
+    const folder = extensionFolder();
+    if (fs.existsSync(folder)) await shell.openPath(folder);
+  });
+
   ipcMain.handle('source:open', async (_e, index) => {
     const source = sources[index];
     if (source && source.path && fs.existsSync(source.path)) await shell.openPath(source.path);
@@ -418,6 +467,7 @@ if (!app.requestSingleInstanceLock()) {
     applyTheme();
     Menu.setApplicationMenu(null);
     registerIpc();
+    startBrowserBridge();
     createWindow();
     rescan().then(checkDownloads);
     watchDownloads();

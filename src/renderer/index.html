@@ -93,8 +93,17 @@
         <input id="watch-downloads" type="checkbox" class="switch">
       </label>
 
-      <h3>How chats get in</h3>
-      <p class="help">Cowork tasks and Code sessions update on their own, including whether Claude is replying. Normal chats live on Claude's servers, so they come from your data export: in Claude go to <strong>Settings → Privacy → Export data</strong>, then download the file from the email. This app spots it in Downloads and helps you fetch your chats.</p>
+      <h3>Get live claude.ai chats</h3>
+      <p class="help">Install the small browser extension that comes with this app. While claude.ai is open in your browser, your chats (titles, dates, and whether Claude is replying) show up here live. It only reads what the page already loaded and sends it to this app on your computer, nowhere else.</p>
+      <ol class="steps">
+        <li><strong>Edge or Chrome:</strong> open <span class="mono">edge://extensions</span> (or <span class="mono">chrome://extensions</span>), turn on <em>Developer mode</em>, click <em>Load unpacked</em> and choose the extension folder.</li>
+        <li><strong>Firefox:</strong> open <span class="mono">about:debugging#/runtime/this-firefox</span>, click <em>Load Temporary Add-on</em> and choose <span class="mono">manifest.json</span> in the extension folder. (Firefox removes it when it restarts.)</li>
+        <li>Reload any open claude.ai tabs.</li>
+      </ol>
+      <button type="button" id="open-extension-folder" class="button tonal small"><span data-icon="folder"></span>Open extension folder</button>
+
+      <h3>Chat history</h3>
+      <p class="help">For chats from before you installed the extension, use your data export: in Claude go to <strong>Settings → Privacy → Export data</strong> and download the file from the email. This app spots it in Downloads and helps you fetch your chats.</p>
 
       <h3>Sources</h3>
       <ul id="sources" class="sources"></ul>

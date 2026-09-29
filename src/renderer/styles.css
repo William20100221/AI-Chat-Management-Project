@@ -685,6 +685,14 @@ button {
   color: var(--on-surface-variant);
 }
 
+.steps {
+  margin: 10px 0 14px;
+  padding-left: 20px;
+  color: var(--on-surface-variant);
+}
+
+.steps li { margin-bottom: 6px; }
+
 .sources {
   list-style: none;
   margin: 0;
