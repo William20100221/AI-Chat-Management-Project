@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-mode="system" data-color="indigo">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:">
@@ -7,81 +7,105 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <h1 class="brand">AI Chat Manager</h1>
-    <label class="search">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+  <header class="app-bar">
+    <h1 class="app-title">AI Chat Manager</h1>
+    <label class="search-bar">
+      <span data-icon="search"></span>
       <input id="search" type="search" placeholder="Search titles and questions" autocomplete="off">
     </label>
-    <div class="topbar-actions">
-      <button id="refresh" class="icon-button" title="Refresh now" aria-label="Refresh now">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
-      </button>
-      <button id="import" class="button">Import chat export</button>
-      <button id="open-settings" class="icon-button" title="Settings and sources" aria-label="Settings and sources">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
-      </button>
+    <div class="app-actions">
+      <button id="refresh" class="icon-button" title="Refresh now" aria-label="Refresh now"><span data-icon="refresh"></span></button>
+      <button id="import" class="icon-button" title="Import Claude data export" aria-label="Import Claude data export"><span data-icon="download"></span></button>
+      <button id="toggle-compact" class="icon-button" title="Compact view" aria-label="Compact view"><span data-icon="compact"></span></button>
+      <button id="open-settings" class="icon-button" title="Settings" aria-label="Settings"><span data-icon="settings"></span></button>
     </div>
   </header>
 
-  <nav class="toolbar">
-    <div class="segmented" id="state-tabs" role="tablist" aria-label="Show">
-      <button role="tab" data-state="working" class="active">Working <span class="count" data-count="working"></span></button>
-      <button role="tab" data-state="all">All <span class="count" data-count="all"></span></button>
-      <button role="tab" data-state="done">Done <span class="count" data-count="done"></span></button>
+  <nav class="filters">
+    <div class="segmented" id="tabs" role="tablist" aria-label="Show">
+      <button role="tab" data-tab="working" class="selected"><span data-icon="check" class="seg-check"></span>Working<span class="count" data-count="working"></span></button>
+      <button role="tab" data-tab="recent"><span data-icon="check" class="seg-check"></span>Recent<span class="count" data-count="recent"></span></button>
+      <button role="tab" data-tab="all"><span data-icon="check" class="seg-check"></span>All<span class="count" data-count="all"></span></button>
+      <button role="tab" data-tab="done"><span data-icon="check" class="seg-check"></span>Done<span class="count" data-count="done"></span></button>
     </div>
     <div class="chips" id="source-chips" aria-label="Source">
-      <button data-source="any" class="active">Everything</button>
-      <button data-source="chat">Chat</button>
-      <button data-source="cowork">Cowork</button>
-      <button data-source="code">Code</button>
+      <button data-source="any" class="selected"><span data-icon="check" class="chip-check"></span>Everything</button>
+      <button data-source="chat"><span data-icon="check" class="chip-check"></span>Chat</button>
+      <button data-source="cowork"><span data-icon="check" class="chip-check"></span>Cowork</button>
+      <button data-source="code"><span data-icon="check" class="chip-check"></span>Code</button>
     </div>
   </nav>
 
   <main class="layout">
     <section class="list-pane" aria-label="Chats and sessions">
       <div id="banner" class="banner" hidden></div>
+      <div id="list-tools" class="list-tools" hidden></div>
       <ol id="list" class="list"></ol>
       <p id="empty" class="empty" hidden></p>
     </section>
 
     <section id="detail" class="detail-pane" aria-label="Details">
-      <div class="detail-placeholder">
-        <p>Select a chat to see what it was about.</p>
-      </div>
+      <div class="detail-placeholder">Select a chat to see what it was about.</div>
     </section>
   </main>
 
-  <footer class="statusbar">
-    <span id="status-text"></span>
-  </footer>
+  <footer class="status-bar"><span id="status-text"></span></footer>
 
-  <div id="toast" class="toast" role="status" hidden></div>
+  <div id="snackbar" class="snackbar" role="status" hidden></div>
 
-  <dialog id="settings" class="settings">
+  <dialog id="settings" class="dialog">
     <form method="dialog">
       <h2>Settings</h2>
+
+      <h3>Appearance</h3>
+      <div class="field">
+        <span class="field-label">Mode</span>
+        <div class="segmented small" id="mode-buttons">
+          <button type="button" data-mode="system"><span data-icon="check" class="seg-check"></span>System</button>
+          <button type="button" data-mode="light"><span data-icon="check" class="seg-check"></span>Light</button>
+          <button type="button" data-mode="dark"><span data-icon="check" class="seg-check"></span>Dark</button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="field-label">Color</span>
+        <div class="swatches" id="color-swatches">
+          <button type="button" data-color="indigo" title="Indigo" aria-label="Indigo"></button>
+          <button type="button" data-color="teal" title="Teal" aria-label="Teal"></button>
+          <button type="button" data-color="green" title="Green" aria-label="Green"></button>
+          <button type="button" data-color="amber" title="Amber" aria-label="Amber"></button>
+          <button type="button" data-color="rose" title="Rose" aria-label="Rose"></button>
+          <button type="button" data-color="violet" title="Violet" aria-label="Violet"></button>
+          <button type="button" data-color="graphite" title="Graphite" aria-label="Graphite"></button>
+        </div>
+      </div>
+
+      <h3>Behaviour</h3>
       <label class="field">
-        <span>Count something as <em>working</em> if it was active in the last</span>
-        <span class="inline"><input id="working-days" type="number" min="1" max="365" step="1"> days</span>
+        <span class="field-label">"Recent" means active in the last</span>
+        <span class="inline"><input id="recent-days" type="number" min="1" max="365" step="1"> days</span>
       </label>
-      <label class="field checkbox">
-        <input id="watch-downloads" type="checkbox">
-        <span>Import my Claude data export automatically when it lands in Downloads</span>
+      <label class="switch-row">
+        <span>Keep the compact window on top of other windows</span>
+        <input id="keep-on-top" type="checkbox" class="switch">
+      </label>
+      <label class="switch-row">
+        <span>Import my Claude data export automatically from Downloads</span>
+        <input id="watch-downloads" type="checkbox" class="switch">
       </label>
 
       <h3>How chats get in</h3>
-      <p class="help">Cowork tasks and Code sessions update on their own. Normal chats live on Claude's servers, so they come from your data export: in Claude go to <strong>Settings → Privacy → Export data</strong>, then download the zip from the email. This app spots it in Downloads and imports it.</p>
+      <p class="help">Cowork tasks and Code sessions update on their own, including whether Claude is replying. Normal chats live on Claude's servers, so they come from your data export: in Claude go to <strong>Settings → Privacy → Export data</strong>, then download the file from the email. This app spots it in Downloads and helps you fetch your chats.</p>
 
       <h3>Sources</h3>
       <ul id="sources" class="sources"></ul>
 
       <div class="dialog-actions">
-        <button class="button primary" value="close">Done</button>
+        <button class="button filled" value="close">Done</button>
       </div>
     </form>
   </dialog>
 
+  <script src="icons.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

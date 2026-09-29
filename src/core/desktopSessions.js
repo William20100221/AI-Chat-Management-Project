@@ -54,8 +54,21 @@ async function sessionDirFor(recordFile) {
   return path.basename(parent) === base ? parent : null;
 }
 
+// Claude shows a blue "unread" dot in its sidebar. If a record carries that state, use it.
+// (Field names are guesses; Settings → Sources lists the fields actually found.)
+function claudeReadState(raw) {
+  const readAt = toMillis(raw.lastReadAt ?? raw.lastViewedAt ?? raw.lastSeenAt ?? raw.readAt ?? raw.viewedAt);
+  let unread = null;
+  for (const key of ['hasUnread', 'unread', 'isUnread', 'hasUnreadMessages']) {
+    if (typeof raw[key] === 'boolean') unread = raw[key];
+  }
+  return { readAt, unread };
+}
+
 function parseRecord(raw, recordFile) {
   return {
+    keys: Object.keys(raw),
+    ...claudeReadState(raw),
     file: recordFile,
     sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : path.basename(recordFile, '.json'),
     cliSessionId: typeof raw.cliSessionId === 'string' ? raw.cliSessionId : null,

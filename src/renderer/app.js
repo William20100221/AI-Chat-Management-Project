@@ -4,15 +4,34 @@
 // inserted with textContent, never as HTML.
 
 const backend = window.api; // "api" itself is taken: the bridge defines window.api as a global
+const icon = window.icon;
 
 const SOURCE_NAMES = { chat: 'Chat', cowork: 'Cowork', code: 'Code' };
+const WORKING = new Set(['responding', 'new-reply', 'pinned']);
+const WORKING_ORDER = { responding: 0, 'new-reply': 1, pinned: 2 };
+const WORKING_GROUPS = { responding: 'Claude is replying', 'new-reply': 'New replies', pinned: 'Pinned' };
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
+const compactQuery = window.matchMedia('(max-width: 719px)');
 
-const view = { state: 'working', source: 'any', searchIds: null, selectedId: null };
-let snap = { items: [], sources: [], settings: { workingDays: 7, watchDownloads: true }, lastImport: null, lastScanAt: null };
+const view = {
+  tab: 'working',
+  source: 'any',
+  searchIds: null,
+  selectedId: null, // full view: shown in the side panel; compact view: expanded under its row
+  stickyId: null, // stays in the list after you open it, even if it no longer matches the tab
+};
+let snap = {
+  items: [],
+  sources: [],
+  settings: { recentDays: 7, watchDownloads: true, themeMode: 'system', themeColor: 'indigo', compact: false, keepOnTop: false },
+  lastImport: null,
+  pendingExport: null,
+  lastScanAt: null,
+};
 let detailKey = null;
+let lastDetail = null; // the details currently shown, so the list can redraw without re-asking
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -23,19 +42,14 @@ function el(tag, className, text) {
   return node;
 }
 
-function svg(pathData, className) {
-  const ns = 'http://www.w3.org/2000/svg';
-  const node = document.createElementNS(ns, 'svg');
-  node.setAttribute('viewBox', '0 0 24 24');
-  node.setAttribute('aria-hidden', 'true');
-  if (className) node.setAttribute('class', className);
-  const path = document.createElementNS(ns, 'path');
-  path.setAttribute('d', pathData);
-  node.appendChild(path);
+function button(label, { kind = 'tonal', iconName, small = true, onClick } = {}) {
+  const node = el('button', `button ${kind}${small ? ' small' : ''}`);
+  node.type = 'button';
+  if (iconName) node.append(icon(iconName));
+  node.append(label);
+  if (onClick) node.addEventListener('click', onClick);
   return node;
 }
-
-const PIN_PATH = 'M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6zM12 15v5';
 
 function plural(n, word) {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -51,6 +65,16 @@ function relative(ms) {
   return dateText(ms);
 }
 
+function shortTime(ms) {
+  if (!ms) return '';
+  const diff = Date.now() - ms;
+  if (diff < MINUTE) return 'now';
+  if (diff < HOUR) return `${Math.floor(diff / MINUTE)}m`;
+  if (diff < DAY) return `${Math.floor(diff / HOUR)}h`;
+  if (diff < 30 * DAY) return `${Math.floor(diff / DAY)}d`;
+  return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
 function dateText(ms) {
   return ms ? new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 }
@@ -61,7 +85,7 @@ function dateTimeText(ms) {
     : '—';
 }
 
-function groupLabel(ms) {
+function timeGroup(ms) {
   if (!ms) return 'No date';
   const startOfToday = new Date().setHours(0, 0, 0, 0);
   if (ms >= startOfToday) return 'Today';
@@ -71,7 +95,11 @@ function groupLabel(ms) {
   return 'Older';
 }
 
-// ---- list ----
+function isCompact() {
+  return compactQuery.matches;
+}
+
+// ---- which items show ----
 
 function matchesFilters(item) {
   if (view.source !== 'any' && item.source !== view.source) return false;
@@ -79,52 +107,93 @@ function matchesFilters(item) {
   return true;
 }
 
-function visibleItems() {
-  return snap.items
-    .filter(matchesFilters)
-    .filter((item) => view.state === 'all' || item.state === view.state)
-    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+function inTab(item, tab) {
+  if (tab === 'working') return WORKING.has(item.state);
+  if (tab === 'done') return item.state === 'done';
+  if (tab === 'recent') return item.state !== 'done' && item.updatedAt >= Date.now() - snap.settings.recentDays * DAY;
+  return true;
 }
+
+function visibleItems() {
+  const list = snap.items.filter((item) => matchesFilters(item) && (inTab(item, view.tab) || item.id === view.stickyId));
+  if (view.tab === 'working') {
+    return list.sort((a, b) => (WORKING_ORDER[a.state] ?? 3) - (WORKING_ORDER[b.state] ?? 3) || (b.updatedAt || 0) - (a.updatedAt || 0));
+  }
+  return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+function groupOf(item) {
+  if (view.tab === 'working') return WORKING_GROUPS[item.state] || 'Just opened';
+  return timeGroup(item.updatedAt);
+}
+
+// ---- rendering: list ----
 
 function renderCounts() {
   const base = snap.items.filter(matchesFilters);
-  const counts = {
-    working: base.filter((i) => i.state === 'working').length,
-    all: base.length,
-    done: base.filter((i) => i.state === 'done').length,
-  };
-  for (const node of document.querySelectorAll('[data-count]')) node.textContent = counts[node.dataset.count];
+  for (const node of document.querySelectorAll('[data-count]')) {
+    const tab = node.dataset.count;
+    const count = base.filter((item) => inTab(item, tab)).length;
+    node.textContent = isCompact() && tab !== 'working' ? '' : String(count);
+  }
 }
 
 function renderBanner() {
   const banner = $('#banner');
-  banner.replaceChildren();
+  const nodes = [];
   const showsChats = view.source === 'any' || view.source === 'chat';
-  if (!showsChats) {
-    banner.hidden = true;
-    return;
-  }
-  if (!snap.lastImport) {
-    banner.append(
-      el('strong', null, 'Your normal chats aren’t here yet. '),
-      'In Claude, go to Settings → Privacy → Export data, then download the zip from the email. ',
-      snap.settings.watchDownloads
-        ? 'This app will pick it up from Downloads by itself.'
-        : 'Then use “Import chat export”.',
+  const pending = snap.pendingExport;
+
+  if (pending && !pending.opened) {
+    const text = el('p');
+    text.append(el('strong', null, 'Your Claude export is ready. '), 'Download your chats and they’ll be imported automatically.');
+    const actions = el('div', 'banner-actions');
+    actions.append(
+      button('Download chats', { kind: 'filled', iconName: 'download', onClick: () => backend.downloadExport() }),
+      button('Dismiss', { kind: 'text', onClick: () => backend.dismissExport() }),
     );
-    banner.hidden = false;
-    return;
-  }
-  const age = Date.now() - snap.lastImport.importedAt;
-  if (age > 7 * DAY) {
-    banner.append(
-      el('strong', null, `Chats were last imported ${relative(snap.lastImport.importedAt)}. `),
-      'New chats show up after your next export (Settings → Privacy → Export data).',
+    nodes.push(text, actions);
+  } else if (pending && pending.opened) {
+    const text = el('p', null, 'Downloading your chats in the browser… they’ll appear here as soon as the zip lands in Downloads.');
+    nodes.push(text, button('Dismiss', { kind: 'text', onClick: () => backend.dismissExport() }));
+  } else if (showsChats && !snap.lastImport && !hintDismissed()) {
+    const text = el('p');
+    text.append(
+      el('strong', null, 'Normal chats aren’t here yet. '),
+      'In Claude: Settings → Privacy → Export data, then download the file from the email.',
     );
-    banner.hidden = false;
-    return;
+    nodes.push(text, button('Hide', { kind: 'text', onClick: () => { dismissHint(); renderBanner(); } }));
   }
-  banner.hidden = true;
+
+  banner.replaceChildren(...nodes);
+  banner.hidden = nodes.length === 0;
+}
+
+function hintDismissed() {
+  try {
+    return localStorage.getItem('hideChatHint') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function dismissHint() {
+  try {
+    localStorage.setItem('hideChatHint', '1');
+  } catch {
+    // storage unavailable: the hint just comes back next time
+  }
+}
+
+function renderListTools() {
+  const tools = $('#list-tools');
+  const unread = snap.items.filter((item) => matchesFilters(item) && item.state === 'new-reply');
+  if (view.tab === 'working' && unread.length > 1) {
+    tools.replaceChildren(button('Mark all as read', { kind: 'text', iconName: 'doneAll', onClick: () => backend.markSeen(unread.map((i) => i.id)) }));
+    tools.hidden = false;
+  } else {
+    tools.hidden = true;
+  }
 }
 
 function renderEmpty(count) {
@@ -132,70 +201,91 @@ function renderEmpty(count) {
   empty.hidden = count > 0;
   if (count > 0) return;
   if (view.searchIds) empty.textContent = 'Nothing matches your search.';
-  else if (view.state === 'working') empty.textContent = `Nothing active in the last ${plural(snap.settings.workingDays, 'day')}. Pin something to keep it here.`;
-  else if (view.state === 'done') empty.textContent = 'Nothing marked as done yet.';
+  else if (view.tab === 'working') empty.textContent = 'Nothing needs you right now. Chats appear here while Claude is replying, when a reply is waiting for you, or when you pin them.';
+  else if (view.tab === 'done') empty.textContent = 'Nothing marked as done.';
+  else if (view.tab === 'recent') empty.textContent = `Nothing active in the last ${plural(snap.settings.recentDays, 'day')}.`;
   else empty.textContent = 'No chats or sessions found yet. Check Settings → Sources.';
+}
+
+function stateIndicator(item) {
+  if (item.state === 'responding') return el('span', 'spinner');
+  if (item.state === 'new-reply') return el('span', 'dot');
+  if (item.state === 'pinned') return icon('pin');
+  if (item.state === 'done') return icon('taskAlt');
+  return null;
 }
 
 function rowFor(item) {
   const row = el('li', `row state-${item.state}`);
   row.dataset.id = item.id;
-  if (item.id === view.selectedId) row.classList.add('selected');
-  row.setAttribute('role', 'button');
+  if (item.id === view.selectedId) row.classList.add('selected', isCompact() ? 'expanded' : 'selected');
   row.tabIndex = -1;
+
+  const avatar = el('span', `avatar ${item.source}`);
+  avatar.append(icon(item.source));
+  avatar.title = SOURCE_NAMES[item.source];
 
   const main = el('div', 'row-main');
   main.append(el('div', 'row-title', item.title));
-  const meta = el('div', 'row-meta');
-  meta.append(el('span', `badge ${item.source}`, SOURCE_NAMES[item.source]));
-  if (item.mark === 'pinned') meta.append(svg(PIN_PATH, 'pin'));
-  if (item.questionCount) meta.append(el('span', null, plural(item.questionCount, 'question')));
-  main.append(meta);
+  const support = el('div', 'row-support');
+  if (item.state === 'responding') support.append(el('span', 'live', 'Claude is replying…'));
+  else if (item.state === 'new-reply') support.append(el('span', 'live', 'New reply'));
+  else support.append(el('span', null, SOURCE_NAMES[item.source]));
+  if (item.questionCount) support.append(el('span', null, `· ${plural(item.questionCount, 'question')}`));
+  main.append(support);
 
-  row.append(el('span', 'state-dot'), main, el('span', 'row-time', relative(item.updatedAt)));
-  row.addEventListener('click', () => select(item.id));
+  const trail = el('div', 'row-trail');
+  const indicator = stateIndicator(item);
+  if (indicator) trail.append(indicator);
+  trail.append(el('span', null, isCompact() ? shortTime(item.updatedAt) : relative(item.updatedAt)));
+
+  row.append(avatar, main, trail, icon('expandMore', 'chevron'));
+  row.addEventListener('click', () => open(item.id));
   return row;
 }
 
 function renderList() {
-  const list = $('#list');
   const items = visibleItems();
   const nodes = [];
   let lastGroup = null;
   for (const item of items) {
-    const group = groupLabel(item.updatedAt);
+    const group = groupOf(item);
     if (group !== lastGroup) {
       nodes.push(el('li', 'group-label', group));
       lastGroup = group;
     }
     nodes.push(rowFor(item));
+    if (isCompact() && item.id === view.selectedId) {
+      const holder = el('li', 'inline-detail');
+      holder.dataset.detailFor = item.id;
+      nodes.push(holder);
+    }
   }
-  list.replaceChildren(...nodes);
+  $('#list').replaceChildren(...nodes);
   renderEmpty(items.length);
+  if (isCompact()) paintDetail(); // the row's detail holder was just re-created
 }
 
 function renderStatus() {
   const bySource = { chat: 0, cowork: 0, code: 0 };
   for (const item of snap.items) bySource[item.source]++;
-  const parts = [
-    `${plural(bySource.cowork, 'Cowork task')}`,
-    `${plural(bySource.code, 'Code session')}`,
-    snap.lastImport
-      ? `${plural(bySource.chat, 'chat')} (export from ${dateText(snap.lastImport.fileMtime || snap.lastImport.importedAt)})`
-      : 'chats: no export imported yet',
-  ];
-  if (snap.lastScanAt) parts.push(`checked ${relative(snap.lastScanAt)}`);
+  const replying = snap.items.filter((i) => i.state === 'responding').length;
+  const parts = [];
+  if (replying) parts.push(`${replying} replying now`);
+  parts.push(plural(bySource.cowork, 'Cowork task'), plural(bySource.code, 'Code session'));
+  parts.push(snap.lastImport ? `${plural(bySource.chat, 'chat')} (export ${dateText(snap.lastImport.fileMtime || snap.lastImport.importedAt)})` : 'no chat export yet');
   $('#status-text').textContent = parts.join('  ·  ');
 }
 
 function render() {
   renderCounts();
   renderBanner();
+  renderListTools();
   renderList();
   renderStatus();
 }
 
-// ---- detail ----
+// ---- rendering: details ----
 
 function messageBox(label, message) {
   const box = el('div', 'message');
@@ -205,150 +295,189 @@ function messageBox(label, message) {
   return box;
 }
 
-function stateLine(item) {
-  if (item.mark === 'pinned') return 'Pinned as working (stays until you change it).';
-  if (item.mark === 'done') return 'Marked as done.';
-  if (item.state === 'done') return 'Archived in Claude.';
-  if (item.state === 'working') return `Working: active in the last ${plural(snap.settings.workingDays, 'day')}.`;
-  return `Not active in the last ${plural(snap.settings.workingDays, 'day')}.`;
+function stateCard(item) {
+  const card = el('div', 'state-card');
+  if (item.state === 'responding') {
+    card.classList.add('live');
+    card.append(el('span', 'spinner'), 'Claude is replying right now');
+  } else if (item.state === 'new-reply') {
+    card.classList.add('live');
+    card.append(el('span', 'dot'), 'New reply you haven’t looked at');
+  } else if (item.mark === 'pinned') {
+    card.append(icon('pin'), 'Pinned: stays in Working until you unpin it');
+  } else if (item.mark === 'done') {
+    card.append(icon('taskAlt'), 'Marked done: comes back if something new happens');
+  } else if (item.state === 'done') {
+    card.append(icon('taskAlt'), 'Archived in Claude');
+  } else {
+    return null;
+  }
+  return card;
 }
 
-function actionButton(label, onClick, active) {
-  const button = el('button', `button small${active ? ' active' : ''}`, label);
-  button.type = 'button';
-  button.addEventListener('click', onClick);
-  return button;
-}
+function buildDetail(detail, item) {
+  const nodes = [el('h2', 'detail-title', detail.title)];
 
-function renderDetail(detail) {
-  const item = snap.items.find((i) => i.id === detail.id);
-  const pane = $('#detail');
-  const nodes = [];
-
-  nodes.push(el('h2', 'detail-title', detail.title));
   const meta = el('div', 'detail-meta');
-  meta.append(
-    el('span', `badge ${detail.source}`, SOURCE_NAMES[detail.source]),
-    el('span', null, `Started ${dateText(detail.createdAt)}`),
-    el('span', null, `Last active ${relative(detail.updatedAt)}`),
-  );
+  const source = el('span', `label-chip ${detail.source}`);
+  source.append(icon(detail.source), SOURCE_NAMES[detail.source]);
+  meta.append(source, el('span', 'label-chip', `Started ${dateText(detail.createdAt)}`), el('span', 'label-chip', `Active ${relative(detail.updatedAt)}`));
   nodes.push(meta);
 
   if (item) {
+    const card = stateCard(item);
+    if (card) nodes.push(card);
+
     const actions = el('div', 'actions');
+    const pinned = item.mark === 'pinned';
+    const done = item.mark === 'done';
     actions.append(
-      actionButton(item.mark === 'pinned' ? 'Pinned as working' : 'Pin as working', () => mark(item.id, item.mark === 'pinned' ? 'auto' : 'pinned'), item.mark === 'pinned'),
-      actionButton(item.mark === 'done' ? 'Marked done' : 'Mark done', () => mark(item.id, item.mark === 'done' ? 'auto' : 'done'), item.mark === 'done'),
+      button(pinned ? 'Unpin' : 'Pin', { iconName: 'pin', kind: pinned ? 'active' : 'tonal', onClick: () => backend.mark(item.id, pinned ? 'auto' : 'pinned') }),
+      button(done ? 'Not done' : 'Done', { iconName: 'taskAlt', kind: done ? 'active' : 'tonal', onClick: () => backend.mark(item.id, done ? 'auto' : 'done') }),
     );
-    if (detail.canOpenChat) actions.append(actionButton('Open in Claude', () => backend.openChat(detail.id)));
-    if (detail.canOpenFolder) actions.append(actionButton('Open folder', () => backend.openFolder(detail.id)));
+    if (detail.canOpenChat) actions.append(button('Open in Claude', { iconName: 'openInNew', kind: 'outlined', onClick: () => backend.openChat(detail.id) }));
+    if (detail.canOpenFolder) actions.append(button('Folder', { iconName: 'folder', kind: 'outlined', onClick: () => backend.openFolder(detail.id) }));
     if (detail.resumeCommand) {
-      actions.append(actionButton('Copy resume command', async () => {
-        await backend.copyResume(detail.id);
-        toast(`Copied: ${detail.resumeCommand}`);
+      actions.append(button('Copy resume command', {
+        iconName: 'copy',
+        kind: 'outlined',
+        onClick: async () => {
+          await backend.copyResume(detail.id);
+          snackbar(`Copied: ${detail.resumeCommand}`);
+        },
       }));
     }
-    nodes.push(actions, el('p', 'state-line', stateLine(item)));
+    nodes.push(actions);
   }
 
-  if (detail.folder) {
-    nodes.push(el('div', 'section-label', 'Folder'), el('div', 'mono', detail.folder));
-  }
+  if (detail.folder && !isCompact()) nodes.push(el('div', 'section-label', 'Folder'), el('div', 'mono', detail.folder));
 
-  if (detail.firstMessage) {
-    nodes.push(el('div', 'section-label', 'First message'), messageBox('first', detail.firstMessage));
-  }
+  if (detail.firstMessage) nodes.push(el('div', 'section-label', 'First message'), messageBox('first', detail.firstMessage));
   const last = detail.lastMessage;
   const sameAsFirst = last && detail.firstMessage && last.text === detail.firstMessage.text && last.at === detail.firstMessage.at;
-  if (last && !sameAsFirst) {
-    nodes.push(el('div', 'section-label', 'Last message'), messageBox('latest', last));
-  }
+  if (last && !sameAsFirst) nodes.push(el('div', 'section-label', 'Last message'), messageBox('latest', last));
 
   if (detail.questions.length) {
     nodes.push(el('div', 'section-label', `Your questions (${detail.questions.length})`));
     const list = el('ol', 'questions');
-    const LIMIT = 10;
+    const limit = isCompact() ? 5 : 10;
     const addQuestion = (q) => {
       const li = el('li');
       li.append(document.createTextNode(q.text));
       if (q.at) li.append(el('span', 'when', dateTimeText(q.at)));
       list.append(li);
     };
-    detail.questions.slice(0, LIMIT).forEach(addQuestion);
+    detail.questions.slice(0, limit).forEach(addQuestion);
     nodes.push(list);
-    if (detail.questions.length > LIMIT) {
-      const more = el('button', 'link-button', `Show all ${detail.questions.length}`);
-      more.type = 'button';
+    if (detail.questions.length > limit) {
+      const more = button(`Show all ${detail.questions.length}`, { kind: 'text' });
       more.addEventListener('click', () => {
-        detail.questions.slice(LIMIT).forEach(addQuestion);
+        detail.questions.slice(limit).forEach(addQuestion);
         more.remove();
       });
       nodes.push(more);
     }
   } else if (!detail.firstMessage) {
-    nodes.push(el('p', 'state-line', 'No messages could be read for this one.'));
+    nodes.push(el('p', 'help', 'No messages could be read for this one.'));
   }
-
-  pane.replaceChildren(...nodes);
+  return nodes;
 }
 
+function detailTarget() {
+  if (isCompact()) return document.querySelector(`[data-detail-for="${CSS.escape(view.selectedId)}"]`);
+  return $('#detail');
+}
+
+function keyOf(item) {
+  return item ? `${item.id}|${item.updatedAt}|${item.mark}|${item.state}|${isCompact()}` : null;
+}
+
+// Fetches details when the item changed (new message, new state), then paints them.
 async function showDetail(id) {
+  const key = keyOf(snap.items.find((i) => i.id === id));
+  if (key === detailKey && lastDetail && lastDetail.id === id) return;
+  detailKey = key;
   try {
     const detail = await backend.getDetail(id);
-    if (view.selectedId === id) renderDetail(detail);
+    if (view.selectedId !== id) return;
+    lastDetail = detail;
+    paintDetail();
   } catch {
     clearDetail();
   }
 }
 
+function paintDetail() {
+  if (!lastDetail || lastDetail.id !== view.selectedId) return;
+  const target = detailTarget();
+  if (target) target.replaceChildren(...buildDetail(lastDetail, snap.items.find((i) => i.id === lastDetail.id)));
+}
+
 function clearDetail() {
   detailKey = null;
-  const placeholder = el('div', 'detail-placeholder');
-  placeholder.append(el('p', null, 'Select a chat to see what it was about.'));
-  $('#detail').replaceChildren(placeholder);
+  lastDetail = null;
+  $('#detail').replaceChildren(el('div', 'detail-placeholder', 'Select a chat to see what it was about.'));
 }
 
-function select(id) {
+// Clicking a row: full view shows it in the side panel; compact view expands it under the row.
+function open(id) {
+  if (isCompact() && view.selectedId === id) {
+    view.selectedId = null;
+    view.stickyId = null;
+    renderList();
+    return;
+  }
   view.selectedId = id;
-  for (const row of document.querySelectorAll('.row')) row.classList.toggle('selected', row.dataset.id === id);
-  const item = snap.items.find((i) => i.id === id);
-  detailKey = item ? `${item.id}|${item.updatedAt}|${item.mark}|${item.state}` : null;
+  view.stickyId = id;
+  lastDetail = null;
+  detailKey = null;
+  renderList();
   showDetail(id);
-}
-
-async function mark(id, value) {
-  await backend.mark(id, value);
+  backend.markSeen([id]); // you've looked at it now
 }
 
 // ---- snapshot updates ----
 
 function applySnapshot(next) {
   snap = next;
-  render();
-  if (!view.selectedId) return;
-  const item = snap.items.find((i) => i.id === view.selectedId);
-  if (!item) {
+  applyAppearance();
+  const selected = view.selectedId && snap.items.find((i) => i.id === view.selectedId);
+  if (view.selectedId && !selected) {
     view.selectedId = null;
+    view.stickyId = null;
     clearDetail();
-    return;
   }
-  const key = `${item.id}|${item.updatedAt}|${item.mark}|${item.state}`;
-  if (key !== detailKey) {
-    detailKey = key;
-    showDetail(item.id);
-  }
+  // You're looking at it, so a reply that finishes while it's open counts as seen.
+  if (selected && selected.state === 'new-reply' && document.hasFocus()) backend.markSeen([selected.id]);
+  renderCounts();
+  renderBanner();
+  renderListTools();
+  renderList();
+  renderStatus();
+  if (selected) showDetail(selected.id);
 }
 
-// ---- toast ----
+function applyAppearance() {
+  const root = document.documentElement;
+  root.dataset.mode = snap.settings.themeMode;
+  root.dataset.color = snap.settings.themeColor;
+  const toggle = $('#toggle-compact');
+  const compact = snap.settings.compact;
+  toggle.title = compact ? 'Full view' : 'Compact view';
+  toggle.setAttribute('aria-label', toggle.title);
+  toggle.replaceChildren(icon(compact ? 'expand' : 'compact'));
+}
 
-let toastTimer = null;
-function toast(text, kind = 'ok') {
-  const node = $('#toast');
+// ---- snackbar ----
+
+let snackbarTimer = null;
+function snackbar(text, kind = 'ok') {
+  const node = $('#snackbar');
   node.textContent = text;
-  node.className = `toast${kind === 'error' ? ' error' : ''}`;
+  node.className = `snackbar${kind === 'error' ? ' error' : ''}`;
   node.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
+  clearTimeout(snackbarTimer);
+  snackbarTimer = setTimeout(() => {
     node.hidden = true;
   }, 4000);
 }
@@ -356,8 +485,7 @@ function toast(text, kind = 'ok') {
 // ---- settings ----
 
 function renderSources() {
-  const list = $('#sources');
-  list.replaceChildren(
+  $('#sources').replaceChildren(
     ...snap.sources.map((source, index) => {
       const li = el('li');
       li.append(el('span', 'source-label', source.label));
@@ -366,43 +494,52 @@ function renderSources() {
       else stateText = plural(source.count, 'item');
       if (source.errors) stateText += ` · ${plural(source.errors, 'file')} couldn’t be read`;
       li.append(el('span', `source-state${source.errors ? ' bad' : ''}`, stateText));
-      if (source.path) {
-        li.append(el('span', 'source-path mono', source.path));
-        if (source.found) {
-          const open = el('button', 'link-button source-open', 'Open folder');
-          open.type = 'button';
-          open.addEventListener('click', () => backend.openSource(index));
-          li.append(open);
-        }
-      }
+      if (source.path) li.append(el('span', 'source-path mono', source.path));
+      if (source.fields && source.fields.length) li.append(el('span', 'source-path', `Fields: ${source.fields.join(', ')}`));
       if (source.lastError) li.append(el('span', 'source-path', `Last error: ${source.lastError}`));
+      if (source.path && source.found) {
+        const openButton = button('Open folder', { kind: 'text', iconName: 'folder', onClick: () => backend.openSource(index) });
+        openButton.classList.add('source-open');
+        li.append(openButton);
+      }
       return li;
     }),
   );
 }
 
-function openSettings() {
-  $('#working-days').value = snap.settings.workingDays;
-  $('#watch-downloads').checked = snap.settings.watchDownloads;
+function renderSettings() {
+  const s = snap.settings;
+  for (const b of document.querySelectorAll('#mode-buttons button')) b.classList.toggle('selected', b.dataset.mode === s.themeMode);
+  for (const b of document.querySelectorAll('#color-swatches button')) b.classList.toggle('selected', b.dataset.color === s.themeColor);
+  $('#recent-days').value = s.recentDays;
+  $('#keep-on-top').checked = s.keepOnTop;
+  $('#watch-downloads').checked = s.watchDownloads;
   renderSources();
-  $('#settings').showModal();
 }
 
 // ---- wiring ----
 
+function fillStaticIcons() {
+  for (const holder of document.querySelectorAll('[data-icon]')) holder.replaceWith(icon(holder.dataset.icon, holder.className));
+}
+
 function wire() {
-  for (const button of document.querySelectorAll('#state-tabs button')) {
-    button.addEventListener('click', () => {
-      view.state = button.dataset.state;
-      for (const b of document.querySelectorAll('#state-tabs button')) b.classList.toggle('active', b === button);
+  fillStaticIcons();
+
+  for (const tabButton of document.querySelectorAll('#tabs button')) {
+    tabButton.addEventListener('click', () => {
+      view.tab = tabButton.dataset.tab;
+      view.stickyId = null; // "just opened" only keeps an item on the tab you opened it from
+      for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('selected', b === tabButton);
       render();
     });
   }
 
-  for (const button of document.querySelectorAll('#source-chips button')) {
-    button.addEventListener('click', () => {
-      view.source = button.dataset.source;
-      for (const b of document.querySelectorAll('#source-chips button')) b.classList.toggle('active', b === button);
+  for (const chip of document.querySelectorAll('#source-chips button')) {
+    chip.addEventListener('click', () => {
+      view.source = chip.dataset.source;
+      view.stickyId = null;
+      for (const b of document.querySelectorAll('#source-chips button')) b.classList.toggle('selected', b === chip);
       render();
     });
   }
@@ -418,28 +555,44 @@ function wire() {
   });
 
   $('#refresh').addEventListener('click', async () => {
-    const button = $('#refresh');
-    button.classList.add('spinning');
+    const refresh = $('#refresh');
+    refresh.classList.add('spinning');
     try {
       await backend.refresh();
     } finally {
-      button.classList.remove('spinning');
+      refresh.classList.remove('spinning');
     }
   });
 
   $('#import').addEventListener('click', async () => {
     const result = await backend.importExport();
-    if (!result.ok && !result.canceled) toast(result.error, 'error');
+    if (!result.ok && !result.canceled) snackbar(result.error, 'error');
   });
 
-  $('#open-settings').addEventListener('click', openSettings);
+  $('#toggle-compact').addEventListener('click', () => backend.updateSettings({ compact: !snap.settings.compact }));
 
-  $('#working-days').addEventListener('change', (event) => {
+  $('#open-settings').addEventListener('click', () => {
+    renderSettings();
+    $('#settings').showModal();
+  });
+
+  for (const b of document.querySelectorAll('#mode-buttons button')) {
+    b.addEventListener('click', () => backend.updateSettings({ themeMode: b.dataset.mode }));
+  }
+  for (const b of document.querySelectorAll('#color-swatches button')) {
+    b.addEventListener('click', () => backend.updateSettings({ themeColor: b.dataset.color }));
+  }
+  $('#recent-days').addEventListener('change', (event) => {
     const days = Number(event.target.value);
-    if (days >= 1) backend.updateSettings({ workingDays: days });
+    if (days >= 1) backend.updateSettings({ recentDays: days });
   });
-  $('#watch-downloads').addEventListener('change', (event) => {
-    backend.updateSettings({ watchDownloads: event.target.checked });
+  $('#keep-on-top').addEventListener('change', (event) => backend.updateSettings({ keepOnTop: event.target.checked }));
+  $('#watch-downloads').addEventListener('change', (event) => backend.updateSettings({ watchDownloads: event.target.checked }));
+
+  // Switching between full and compact layout re-draws rows (titles only vs. two lines).
+  compactQuery.addEventListener('change', () => {
+    render();
+    if (!isCompact()) paintDetail(); // move the open details into the side panel
   });
 
   document.addEventListener('keydown', (event) => {
@@ -455,18 +608,22 @@ function wire() {
     if (!items.length) return;
     const index = items.findIndex((i) => i.id === view.selectedId);
     const next = event.key === 'ArrowDown' ? Math.min(items.length - 1, index + 1) : Math.max(0, index - 1);
-    select(items[next].id);
+    open(items[next].id);
     const row = document.querySelector(`.row[data-id="${CSS.escape(items[next].id)}"]`);
     if (row) row.scrollIntoView({ block: 'nearest' });
   });
 
   backend.onSnapshot((next) => {
     applySnapshot(next);
-    if ($('#settings').open) renderSources();
+    if ($('#settings').open) renderSettings();
   });
-  backend.onNotice((notice) => toast(notice.text, notice.kind));
+  backend.onNotice((notice) => snackbar(notice.text, notice.kind));
 
-  setInterval(render, MINUTE); // keep "5 minutes ago" labels fresh
+  setInterval(() => {
+    renderCounts();
+    renderList();
+    renderStatus();
+  }, MINUTE); // keep "5 minutes ago" labels fresh
 }
 
 wire();

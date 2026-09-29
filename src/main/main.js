@@ -2,13 +2,17 @@
 
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, screen, shell } = require('electron');
 const { Scanner } = require('../core/scanner');
 const { Store } = require('../core/store');
-const { workingState } = require('../core/status');
-const { readClaudeExportFile, findCandidateZips, mightBeClaudeExport } = require('../core/chatExport');
+const { itemState } = require('../core/status');
+const { readExportFile, findCandidateFiles, mightBeClaudeExport } = require('../core/chatExport');
 
-const RESCAN_EVERY_MS = 60 * 1000;
+const RESCAN_EVERY_MS = 30 * 1000;
+const WINDOW_SIZES = {
+  full: { width: 1180, height: 760 },
+  compact: { width: 380, height: 680 },
+};
 
 let win = null;
 let store = null;
@@ -26,7 +30,7 @@ function send(channel, payload) {
 }
 
 function snapshot() {
-  const { workingDays } = store.settings;
+  const { recentDays } = store.settings;
   const now = Date.now();
   const list = [...items.values()].map((item) => {
     const override = store.override(item.id);
@@ -36,18 +40,25 @@ function snapshot() {
       title: item.title,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
-      state: workingState(item, override, workingDays, now),
+      state: itemState(item, { override, seenAt: store.seenAt(item.id), recentDays, now }),
       mark: override.pinned ? 'pinned' : override.done ? 'done' : 'auto',
       questionCount: item.questions.length,
     };
   });
   return {
     items: list,
-    sources: sources.map(({ label, path: p, found, count, errors, lastError }) => ({ label, path: p, found, count, errors, lastError })),
+    sources: sources.map(({ label, path: p, found, count, errors, lastError, fields }) => ({ label, path: p, found, count, errors, lastError, fields })),
     settings: store.settings,
     lastImport: store.data.lastImport,
+    pendingExport: store.data.pendingExport
+      ? { createdAt: store.data.pendingExport.createdAt, opened: Boolean(store.data.pendingExport.openedAt) }
+      : null,
     lastScanAt,
   };
+}
+
+function pushSnapshot() {
+  send('snapshot', snapshot());
 }
 
 // Runs one scan at a time; a request during a scan queues exactly one more.
@@ -63,7 +74,7 @@ async function rescan() {
       sources = result.sources;
       lastScanAt = Date.now();
       watchFolders(result.locations);
-      send('snapshot', snapshot());
+      pushSnapshot();
     } catch (err) {
       send('notice', { kind: 'error', text: `Scan failed: ${err.message}` });
     } finally {
@@ -85,7 +96,7 @@ function debounce(fn, ms) {
   };
 }
 
-const rescanSoon = debounce(rescan, 800);
+const rescanSoon = debounce(rescan, 700);
 
 function watch(dir, onChange, recursive) {
   if (watchers.has(dir)) return;
@@ -108,10 +119,18 @@ function watchFolders(locations) {
 
 // ---- Claude data export (for normal chats) ----
 
-async function importChats(chats, file, fileMtime) {
-  store.setChats(chats, { file: path.basename(file), fileMtime, importedAt: Date.now(), count: chats.length });
+async function importChats(result, file, fileMtime) {
+  const merge = result.part > 0;
+  store.setChats(result.chats, { file: path.basename(file), fileMtime, importedAt: Date.now() }, { merge });
+  if (store.data.pendingExport) store.setPendingExport(null);
   await rescan();
-  send('notice', { kind: 'ok', text: `Imported ${chats.length} chats from ${path.basename(file)}` });
+  send('notice', { kind: 'ok', text: `Imported ${result.chats.length} chats from ${path.basename(file)}` });
+}
+
+function rememberManifest(manifest) {
+  store.setPendingExport({ ...manifest, foundAt: Date.now(), openedAt: null });
+  pushSnapshot();
+  send('notice', { kind: 'ok', text: 'Your Claude export is ready. Click "Download chats" to get it.' });
 }
 
 async function waitUntilStable(file) {
@@ -125,22 +144,28 @@ async function checkDownloads() {
   if (!store.settings.watchDownloads || checkingDownloads) return;
   checkingDownloads = true;
   try {
-    const candidates = await findCandidateZips(app.getPath('downloads'), store.data.seenZips);
-    for (const zip of candidates) {
-      let chats = null;
+    const candidates = await findCandidateFiles(app.getPath('downloads'), store.data.seenFiles);
+    for (const candidate of candidates) {
       try {
-        if (await mightBeClaudeExport(zip.file)) {
-          if (!(await waitUntilStable(zip.file))) continue; // still being written; try again later
-          chats = await readClaudeExportFile(zip.file);
+        if (candidate.kind === 'zip') {
+          if (!(await mightBeClaudeExport(candidate.file))) {
+            store.markFileSeen(candidate.key);
+            continue;
+          }
+          if (!(await waitUntilStable(candidate.file))) continue; // still downloading; try again later
+        }
+        const result = await readExportFile(candidate.file);
+        store.markFileSeen(candidate.key);
+        if (!result) continue;
+        if (result.kind === 'manifest') {
+          rememberManifest(result.manifest);
+        } else {
+          const last = store.data.lastImport;
+          const newer = !last || candidate.mtimeMs > (last.fileMtime || 0);
+          if (result.part > 0 || newer) await importChats(result, candidate.file, candidate.mtimeMs);
         }
       } catch {
-        chats = null;
-      }
-      store.markZipSeen(zip.key);
-      const newer = !store.data.lastImport || zip.mtimeMs > (store.data.lastImport.fileMtime || 0);
-      if (chats && newer) {
-        await importChats(chats, zip.file, zip.mtimeMs);
-        break; // candidates are newest first
+        store.markFileSeen(candidate.key); // unreadable: don't retry until the file changes
       }
     }
   } finally {
@@ -148,7 +173,7 @@ async function checkDownloads() {
   }
 }
 
-const checkDownloadsSoon = debounce(checkDownloads, 3000);
+const checkDownloadsSoon = debounce(checkDownloads, 2500);
 
 function watchDownloads() {
   if (downloadsWatcher) {
@@ -167,7 +192,52 @@ function watchDownloads() {
   }
 }
 
-// ---- Window and IPC ----
+// ---- window: full / compact, theme ----
+
+function applyTheme() {
+  nativeTheme.themeSource = store.settings.themeMode;
+}
+
+function onScreen(bounds) {
+  return screen.getAllDisplays().some(({ workArea: a }) => (
+    bounds.x < a.x + a.width - 40 && bounds.x + bounds.width > a.x + 40
+    && bounds.y >= a.y - 10 && bounds.y < a.y + a.height - 40
+  ));
+}
+
+function windowMode() {
+  return store.settings.compact ? 'compact' : 'full';
+}
+
+function applyWindowMode({ switching = false } = {}) {
+  const mode = windowMode();
+  const saved = store.windowBounds(mode);
+  if (saved && onScreen(saved)) {
+    win.setBounds(saved);
+  } else if (switching) {
+    // keep the top-right corner where it was, like a note sliding in from the side
+    const current = win.getBounds();
+    const size = WINDOW_SIZES[mode];
+    win.setBounds({ x: current.x + current.width - size.width, y: current.y, ...size });
+  } else {
+    win.setSize(WINDOW_SIZES[mode].width, WINDOW_SIZES[mode].height);
+    win.center();
+  }
+  win.setAlwaysOnTop(mode === 'compact' && store.settings.keepOnTop);
+}
+
+// Remembers the window's size and place separately for full and compact view.
+let boundsTimer = null;
+function saveBoundsSoon() {
+  const mode = windowMode();
+  clearTimeout(boundsTimer);
+  boundsTimer = setTimeout(() => {
+    if (mode !== windowMode() || !win || win.isDestroyed() || win.isMinimized() || win.isMaximized()) return;
+    store.saveWindowBounds(mode, win.getBounds());
+  }, 600);
+}
+
+// ---- IPC ----
 
 function requireItem(id) {
   const item = items.get(id);
@@ -212,12 +282,22 @@ function registerIpc() {
     requireItem(id);
     if (!['pinned', 'done', 'auto'].includes(mark)) throw new Error('Unknown mark');
     store.setMark(id, mark);
-    send('snapshot', snapshot());
+    pushSnapshot();
+  });
+
+  ipcMain.handle('items:seen', (_e, ids) => {
+    const known = (Array.isArray(ids) ? ids : [ids]).filter((id) => items.has(id));
+    if (!known.length) return;
+    store.markSeen(known);
+    pushSnapshot();
   });
 
   ipcMain.handle('item:open-chat', async (_e, id) => {
     const item = requireItem(id);
-    if (item.url) await shell.openExternal(item.url);
+    if (!item.url) return;
+    store.markSeen([id]);
+    await shell.openExternal(item.url);
+    pushSnapshot();
   });
 
   ipcMain.handle('item:open-folder', async (_e, id) => {
@@ -231,10 +311,22 @@ function registerIpc() {
   });
 
   ipcMain.handle('settings:update', async (_e, patch) => {
+    const before = { ...store.settings };
     store.updateSettings(patch || {});
-    watchDownloads();
-    send('snapshot', snapshot());
-    if (store.settings.watchDownloads) checkDownloads();
+    const after = store.settings;
+    if (after.themeMode !== before.themeMode) applyTheme();
+    if (after.watchDownloads !== before.watchDownloads) {
+      watchDownloads();
+      if (after.watchDownloads) checkDownloads();
+    }
+    if (after.compact !== before.compact) {
+      if (!win.isMaximized()) store.saveWindowBounds(before.compact ? 'compact' : 'full', win.getBounds());
+      if (win.isMaximized()) win.unmaximize();
+      applyWindowMode({ switching: true });
+    } else if (after.keepOnTop !== before.keepOnTop) {
+      win.setAlwaysOnTop(after.compact && after.keepOnTop);
+    }
+    pushSnapshot();
   });
 
   ipcMain.handle('export:import', async () => {
@@ -247,13 +339,33 @@ function registerIpc() {
     if (result.canceled || !result.filePaths[0]) return { ok: false, canceled: true };
     const file = result.filePaths[0];
     try {
-      const chats = await readClaudeExportFile(file);
-      if (!chats) return { ok: false, error: 'That file is not a Claude data export (no Claude conversations.json inside).' };
-      await importChats(chats, file, fs.statSync(file).mtimeMs);
-      return { ok: true, count: chats.length };
+      const parsed = await readExportFile(file);
+      if (!parsed) return { ok: false, error: 'That file is not a Claude data export.' };
+      if (parsed.kind === 'manifest') {
+        rememberManifest(parsed.manifest);
+        return { ok: true };
+      }
+      await importChats(parsed, file, fs.statSync(file).mtimeMs);
+      return { ok: true, count: parsed.chats.length };
     } catch (err) {
       return { ok: false, error: err.message };
     }
+  });
+
+  // Opens the one-time conversation download links from the export email in your browser.
+  ipcMain.handle('export:download', async () => {
+    const pending = store.data.pendingExport;
+    if (!pending) return;
+    let links = pending.files.filter((f) => f.category === 'conversations' || /^conversations/i.test(f.filename));
+    if (!links.length) links = pending.files;
+    for (const link of links) await shell.openExternal(link.url);
+    store.setPendingExport({ ...pending, openedAt: Date.now() });
+    pushSnapshot();
+  });
+
+  ipcMain.handle('export:dismiss', () => {
+    store.setPendingExport(null);
+    pushSnapshot();
   });
 
   ipcMain.handle('scan:refresh', async () => {
@@ -269,12 +381,11 @@ function registerIpc() {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1180,
-    height: 760,
-    minWidth: 900,
-    minHeight: 480,
+    ...WINDOW_SIZES[windowMode()],
+    minWidth: 320,
+    minHeight: 420,
     title: 'AI Chat Manager',
-    backgroundColor: '#f7f6f3',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#131318' : '#fbf8ff',
     show: false,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
@@ -283,6 +394,9 @@ function createWindow() {
       sandbox: true,
     },
   });
+  applyWindowMode();
+  win.on('resize', saveBoundsSoon);
+  win.on('move', saveBoundsSoon);
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.once('ready-to-show', () => win.show());
@@ -301,6 +415,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     store = new Store(path.join(app.getPath('userData'), 'state.json'));
+    applyTheme();
     Menu.setApplicationMenu(null);
     registerIpc();
     createWindow();

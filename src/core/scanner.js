@@ -30,6 +30,12 @@ class Scanner {
     return value;
   }
 
+  // When the file was last written: a transcript that is still growing means Claude is busy.
+  lastWrite(file) {
+    const hit = this.cache.get(file);
+    return hit ? hit.mtimeMs : null;
+  }
+
   // Every <session-id>.jsonl directly inside ~/.claude/projects/<project>/ (not subagent files).
   async indexProjectTranscripts(projectsDir) {
     const index = new Map();
@@ -65,12 +71,14 @@ class Scanner {
 
     for (const { root, name, exists } of locations.sessionRoots) {
       const status = { label: DESKTOP_LABELS[name], path: root, found: exists, count: 0, errors: 0 };
+      const fields = new Set();
       sources.push(status);
       if (!exists) continue;
       for (const file of await findRecordFiles(root)) {
         try {
           liveFiles.add(file);
           const record = await this.cached(file, readRecord);
+          record.keys.forEach((key) => fields.add(key));
           let transcriptFile = null;
           let kind;
           if (record.cliSessionId && projectTranscripts.has(record.cliSessionId)) {
@@ -87,7 +95,7 @@ class Scanner {
             liveFiles.add(transcriptFile);
             summary = await this.cached(transcriptFile, parseTranscript);
           }
-          const item = sessionItem(kind, record, summary);
+          const item = sessionItem(kind, record, summary, transcriptFile && this.lastWrite(transcriptFile));
           items.set(item.id, item);
           status.count++;
         } catch (err) {
@@ -95,6 +103,7 @@ class Scanner {
           status.lastError = err.message;
         }
       }
+      status.fields = [...fields].sort();
     }
 
     // Sessions started from the terminal have a transcript but no Claude Desktop record.
@@ -112,7 +121,7 @@ class Scanner {
         liveFiles.add(file);
         const summary = await this.cached(file, parseTranscript);
         if (!summary.questions.length) continue; // title-only or empty files
-        const item = terminalItem(sessionId, summary);
+        const item = terminalItem(sessionId, summary, this.lastWrite(file));
         items.set(item.id, item);
         terminal.count++;
       } catch (err) {
@@ -144,7 +153,12 @@ function detail(questions, firstMessage, lastMessage) {
   };
 }
 
-function sessionItem(kind, record, summary) {
+function activity(summary, lastWriteAt) {
+  if (!summary) return null;
+  return { pending: summary.pending, finishedAt: summary.finishedAt, lastWriteAt: lastWriteAt || summary.updatedAt };
+}
+
+function sessionItem(kind, record, summary, lastWriteAt) {
   const questions = summary && summary.questions.length
     ? summary.questions
     : record.initialMessage
@@ -166,11 +180,14 @@ function sessionItem(kind, record, summary) {
     folder: kind === 'code' ? record.cwd || (summary && summary.cwd) : record.sessionDir || record.cwd,
     resumeId: kind === 'code' ? record.cliSessionId || (summary && summary.sessionId) : null,
     url: null,
+    activity: activity(summary, lastWriteAt),
+    claudeUnread: record.unread,
+    claudeReadAt: record.readAt,
     ...detail(questions, summary && summary.firstMessage, summary && summary.lastMessage),
   };
 }
 
-function terminalItem(sessionId, summary) {
+function terminalItem(sessionId, summary, lastWriteAt) {
   return {
     id: `code:${sessionId}`,
     source: 'code',
@@ -181,6 +198,9 @@ function terminalItem(sessionId, summary) {
     folder: summary.cwd,
     resumeId: sessionId,
     url: null,
+    activity: activity(summary, lastWriteAt),
+    claudeUnread: null,
+    claudeReadAt: null,
     ...detail(summary.questions, summary.firstMessage, summary.lastMessage),
   };
 }
@@ -196,6 +216,9 @@ function chatItem(chat) {
     folder: null,
     resumeId: null,
     url: /^[0-9a-f-]{8,}$/i.test(chat.uuid) ? `https://claude.ai/chat/${chat.uuid}` : null,
+    activity: null, // the export is a snapshot: no live state for normal chats yet
+    claudeUnread: null,
+    claudeReadAt: null,
     ...detail(chat.questions, chat.firstMessage, chat.lastMessage),
   };
 }

@@ -7,18 +7,25 @@ const os = require('os');
 const path = require('path');
 const { zipSync, strToU8 } = require('fflate');
 
-const { parseTranscript, transcriptTitle } = require('../src/core/transcript');
+const { parseTranscript, transcriptTitle, applyEntry, emptySummary } = require('../src/core/transcript');
 const { Scanner } = require('../src/core/scanner');
-const { workingState, DAY } = require('../src/core/status');
+const { itemState, RESPONDING_TIMEOUT, DAY } = require('../src/core/status');
 const { Store } = require('../src/core/store');
+const { plainText } = require('../src/core/text');
 const {
   readClaudeExportZip,
-  readClaudeExportFile,
-  findCandidateZips,
+  readExportFile,
+  parseManifest,
+  exportPart,
+  findCandidateFiles,
   zipEntryNames,
   mightBeClaudeExport,
 } = require('../src/core/chatExport');
-const { makeFakeHome, claudeExportConversations, IDS } = require('./fixtures');
+const { makeFakeHome, claudeExportConversations, IDS, user, assistant } = require('./fixtures');
+
+const tmpDir = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+
+// ---- transcripts ----
 
 test('transcript: keeps real questions, skips commands, tool results, meta and half-written lines', async () => {
   const fake = makeFakeHome();
@@ -32,6 +39,39 @@ test('transcript: keeps real questions, skips commands, tool results, meta and h
   assert.equal(summary.updatedAt, Date.parse('2026-09-26T05:03:00Z'));
 });
 
+test('transcript: knows whether Claude is still replying', () => {
+  const s = emptySummary();
+  applyEntry(s, user('Fix the bug', '2026-09-28T10:00:00Z'));
+  assert.equal(s.pending, true, 'your message starts a turn');
+
+  applyEntry(s, assistant('Looking at the file', '2026-09-28T10:00:05Z', 'tool_use'));
+  assert.equal(s.pending, true, 'a reply that calls a tool is not finished');
+
+  applyEntry(s, { type: 'user', timestamp: '2026-09-28T10:00:06Z', toolUseResult: {}, message: { content: [{ type: 'tool_result', content: 'ok' }] } });
+  assert.equal(s.pending, true, 'tool result: Claude carries on');
+  assert.equal(s.questions.length, 1, 'tool results are not questions');
+
+  applyEntry(s, assistant('Fixed it.', '2026-09-28T10:00:20Z'));
+  assert.equal(s.pending, false);
+  assert.equal(s.finishedAt, Date.parse('2026-09-28T10:00:20Z'));
+
+  applyEntry(s, user('One more thing', '2026-09-28T10:05:00Z'));
+  applyEntry(s, { type: 'user', timestamp: '2026-09-28T10:05:02Z', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } });
+  assert.equal(s.pending, false, 'interrupting ends the turn');
+  assert.equal(s.finishedAt, Date.parse('2026-09-28T10:00:20Z'), 'an interruption is not a new reply');
+
+  applyEntry(s, { type: 'assistant', isSidechain: true, timestamp: '2026-09-28T10:06:00Z', message: { stop_reason: 'tool_use', content: [] } });
+  assert.equal(s.pending, false, 'helper-agent lines are ignored');
+});
+
+test('text: previews drop Markdown symbols', () => {
+  assert.equal(plainText('## What you need\n- **For writing:** use `pip`'), 'What you need\n• For writing: use pip');
+  assert.equal(plainText('See [the docs](https://x.y) and *this*'), 'See the docs and this');
+  assert.equal(plainText('2 * 3 * 4'), '2 * 3 * 4');
+});
+
+// ---- scanning ----
+
 test('scanner: finds Cowork tasks, desktop Code sessions and terminal sessions', async () => {
   const fake = makeFakeHome();
   const { items, sources } = await new Scanner(fake.options).scan([]);
@@ -43,6 +83,8 @@ test('scanner: finds Cowork tasks, desktop Code sessions and terminal sessions',
   assert.equal(cowork.questions.length, 2);
   assert.equal(cowork.lastMessage.text, 'Added lunch at 12:30.');
   assert.equal(cowork.resumeId, null);
+  assert.equal(cowork.activity.pending, false);
+  assert.equal(cowork.activity.finishedAt, Date.parse('2026-09-27T09:00:00Z'));
 
   const code = byId[`code:${IDS.codeRecord}`];
   assert.ok(code, 'desktop code session found');
@@ -54,46 +96,77 @@ test('scanner: finds Cowork tasks, desktop Code sessions and terminal sessions',
   const terminal = byId[`code:${IDS.terminalCli}`];
   assert.ok(terminal, 'terminal session found');
   assert.equal(terminal.title, 'Eye tracker v2');
+  assert.equal(terminal.activity.pending, true, 'last line is your question, so Claude is on it');
 
   assert.equal(byId[`code:${IDS.codeCli}`], undefined, 'desktop session is not listed twice');
   assert.equal(byId[`code:${IDS.titleOnlyCli}`], undefined, 'title-only file is skipped');
   assert.equal(items.length, 3);
   assert.ok(sources.every((s) => s.errors === 0));
+  const coworkSource = sources.find((s) => s.label.includes('Cowork'));
+  assert.ok(coworkSource.fields.includes('lastActivityAt'), 'record field names are reported for diagnostics');
 });
 
-test('scanner: picks up changes to a transcript', async () => {
+test('scanner: picks up a reply as it is being written', async () => {
   const fake = makeFakeHome();
   const scanner = new Scanner(fake.options);
   await scanner.scan([]);
   const file = path.join(fake.projects, 'C--FTC-FtcRobotController', `${IDS.codeCli}.jsonl`);
-  fs.appendFileSync(file, JSON.stringify({
-    type: 'user',
-    timestamp: '2026-09-28T03:00:00Z',
-    message: { role: 'user', content: 'And the other wheel?' },
-  }) + '\n');
-  const { items } = await scanner.scan([]);
-  const code = items.find((i) => i.id === `code:${IDS.codeRecord}`);
+  fs.appendFileSync(file, JSON.stringify(user('And the other wheel?', '2026-09-28T03:00:00Z')) + '\n');
+  let code = (await scanner.scan([])).items.find((i) => i.id === `code:${IDS.codeRecord}`);
   assert.equal(code.questions.length, 2);
   assert.equal(code.updatedAt, Date.parse('2026-09-28T03:00:00Z'));
+  assert.equal(code.activity.pending, true);
+
+  fs.appendFileSync(file, JSON.stringify(assistant('Same fix on port 1.', '2026-09-28T03:00:30Z')) + '\n');
+  code = (await scanner.scan([])).items.find((i) => i.id === `code:${IDS.codeRecord}`);
+  assert.equal(code.activity.pending, false);
+  assert.equal(code.activity.finishedAt, Date.parse('2026-09-28T03:00:30Z'));
 });
 
 test('scanner: reports missing folders instead of failing', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-empty-'));
+  const home = tmpDir('acm-empty-');
   const { items, sources } = await new Scanner({ home, platform: 'win32', env: {} }).scan([]);
   assert.equal(items.length, 0);
   assert.ok(sources.some((s) => s.label.startsWith('Claude Code') && s.found === false));
 });
 
-function exportZip(conversations, extraFiles = {}) {
-  return Buffer.from(zipSync({
-    'conversations.json': strToU8(JSON.stringify(conversations)),
-    'users.json': strToU8('[]'),
-    ...extraFiles,
-  }));
+// ---- states ----
+
+test('state: replying, new reply, seen, pinned, recent, done', () => {
+  const now = Date.parse('2026-09-28T12:00:00Z');
+  const base = { updatedAt: now - 60 * 1000 };
+  const replying = { ...base, activity: { pending: true, finishedAt: now - DAY, lastWriteAt: now - 30 * 1000 } };
+  const stale = { ...base, activity: { pending: true, finishedAt: null, lastWriteAt: now - RESPONDING_TIMEOUT - 1 } };
+  const finished = { ...base, activity: { pending: false, finishedAt: now - 60 * 1000, lastWriteAt: now - 60 * 1000 } };
+  const old = { updatedAt: now - 30 * DAY, activity: null };
+
+  assert.equal(itemState(replying, { now }), 'responding');
+  assert.equal(itemState(stale, { now }), 'recent', 'a turn that went quiet for 10 minutes is not "replying"');
+  assert.equal(itemState(finished, { now, seenAt: 0 }), 'new-reply');
+  assert.equal(itemState(finished, { now, seenAt: now - 10 * 1000 }), 'recent', 'looked at after it finished');
+  assert.equal(itemState({ ...finished, claudeReadAt: now - 1000 }, { now }), 'recent', "Claude's own read time counts");
+  assert.equal(itemState({ ...finished, claudeUnread: false }, { now }), 'recent');
+  assert.equal(itemState({ ...base, activity: null, claudeUnread: true }, { now }), 'recent', 'no transcript, no live state');
+  assert.equal(itemState(old, { now, override: { pinned: true } }), 'pinned');
+  assert.equal(itemState(old, { now }), 'older');
+  assert.equal(itemState(old, { now, recentDays: 60 }), 'recent');
+  assert.equal(itemState({ ...old, archived: true }, { now }), 'done');
+
+  const doneAt = now - 10 * 60 * 1000;
+  assert.equal(itemState({ updatedAt: doneAt - 1000 }, { now, override: { done: true, at: doneAt } }), 'done');
+  assert.equal(itemState({ updatedAt: doneAt + 1000 }, { now, override: { done: true, at: doneAt } }), 'recent', 'something new after "done" brings it back');
+});
+
+// ---- chat export ----
+
+function zip(files) {
+  const entries = {};
+  for (const [name, value] of Object.entries(files)) entries[name] = strToU8(typeof value === 'string' ? value : JSON.stringify(value));
+  return Buffer.from(zipSync(entries));
 }
 
-test('chat export: reads a Claude export zip', () => {
-  const chats = readClaudeExportZip(exportZip(claudeExportConversations()));
+test('chat export: reads the older single-zip export', () => {
+  const chats = readClaudeExportZip(zip({ 'conversations.json': claudeExportConversations(), 'users.json': [] }));
   assert.equal(chats.length, 1, 'the empty placeholder chat is skipped');
   const [chat] = chats;
   assert.equal(chat.title, 'Becoming a developer career path');
@@ -103,56 +176,115 @@ test('chat export: reads a Claude export zip', () => {
   assert.equal(chat.updatedAt, Date.parse('2026-09-27T21:00:00Z'));
 });
 
-test('chat export: ignores a ChatGPT export and random zips', () => {
-  const chatgpt = Buffer.from(zipSync({ 'conversations.json': strToU8(JSON.stringify([{ title: 'x', mapping: {} }])) }));
-  assert.equal(readClaudeExportZip(chatgpt), null);
-  const random = Buffer.from(zipSync({ 'photo.txt': strToU8('hi') }));
-  assert.equal(readClaudeExportZip(random), null);
+test('chat export: reads newer layouts (one file per chat, JSONL, wrapped, titles only)', () => {
+  const [first] = claudeExportConversations();
+  const perFile = readClaudeExportZip(zip({ 'conversations/a.json': first, 'conversations/b.json': { ...first, uuid: 'b', name: 'Second' } }));
+  assert.deepEqual(perFile.map((c) => c.title).sort(), ['Becoming a developer career path', 'Second']);
+
+  const jsonl = readClaudeExportZip(zip({ 'conversations.jsonl': `${JSON.stringify(first)}\n${JSON.stringify({ ...first, uuid: 'c' })}\n` }));
+  assert.equal(jsonl.length, 2);
+
+  const wrapped = readClaudeExportZip(zip({ 'data.json': { conversations: [first] } }));
+  assert.equal(wrapped.length, 1);
+
+  const messagesKey = readClaudeExportZip(zip({ 'conversations.json': [{ id: 'd', title: 'Uses messages', created_at: '2026-09-01T00:00:00Z', messages: [{ role: 'user', content: 'hi' }] }] }));
+  assert.equal(messagesKey[0].title, 'Uses messages');
+  assert.equal(messagesKey[0].questions[0].text, 'hi');
+
+  const titlesOnly = readClaudeExportZip(zip({ 'conversations_metadata.json': [{ uuid: 'e', name: 'Only a title', updated_at: '2026-09-02T00:00:00Z' }] }));
+  assert.equal(titlesOnly[0].title, 'Only a title');
+  assert.equal(titlesOnly[0].questions.length, 0);
 });
 
-test('chat export: lists zip contents without unzipping, and finds new zips in Downloads', async () => {
-  const downloads = fs.mkdtempSync(path.join(os.tmpdir(), 'acm-dl-'));
-  const claudeZip = path.join(downloads, 'data-2026-09-28.zip');
+test('chat export: ignores ChatGPT exports and unrelated zips', () => {
+  assert.equal(readClaudeExportZip(zip({ 'conversations.json': [{ title: 'x', mapping: {} }] })), null);
+  assert.equal(readClaudeExportZip(zip({ 'projects.json': [{ uuid: 'p', name: 'A project', created_at: '2026-01-01' }] })), null);
+  assert.equal(readClaudeExportZip(zip({ 'photo.txt': 'hi' })), null);
+});
+
+test('chat export: reads the manifest from the export email', async () => {
+  const manifest = {
+    created_at: '2026-09-29T00:11:05.384154+00:00',
+    data_files: [
+      { category: 'conversations', filename: 'conversations-000.zip', export_url: 'https://claude.ai/export/org/download/abc' },
+      { category: 'projects', filename: 'projects-000.zip', export_url: 'https://claude.ai/export/org/download/def' },
+      { category: 'evil', filename: 'x.zip', export_url: 'https://example.com/export/steal' },
+    ],
+  };
+  const parsed = parseManifest(manifest);
+  assert.equal(parsed.files.length, 2, 'only claude.ai export links are kept');
+  assert.equal(parsed.createdAt, Date.parse('2026-09-29T00:11:05.384Z'));
+
+  const file = path.join(tmpDir('acm-manifest-'), 'manifest-123.json');
+  fs.writeFileSync(file, JSON.stringify(manifest));
+  const result = await readExportFile(file);
+  assert.equal(result.kind, 'manifest');
+
+  assert.equal(parseManifest({ data_files: [{ export_url: 'http://claude.ai/export/x' }] }), null, 'http links are rejected');
+  assert.equal(exportPart('conversations-002.zip'), 2);
+  assert.equal(exportPart('data-2026.zip'), 0);
+});
+
+test('chat export: finds new files in Downloads and peeks inside zips cheaply', async () => {
+  const downloads = tmpDir('acm-dl-');
+  const claudeZip = path.join(downloads, 'conversations-000.zip');
+  const oldStyleZip = path.join(downloads, 'data-2026-09-28.zip');
   const otherZip = path.join(downloads, 'holiday-photos.zip');
-  fs.writeFileSync(claudeZip, exportZip(claudeExportConversations()));
-  fs.writeFileSync(otherZip, Buffer.from(zipSync({ 'a.txt': strToU8('a') })));
+  fs.writeFileSync(claudeZip, zip({ 'conversations.json': claudeExportConversations() }));
+  fs.writeFileSync(oldStyleZip, zip({ 'conversations.json': claudeExportConversations(), 'users.json': [] }));
+  fs.writeFileSync(otherZip, zip({ 'a.txt': 'a' }));
+  fs.writeFileSync(path.join(downloads, 'manifest.json'), '{}');
   fs.writeFileSync(path.join(downloads, 'notes.txt'), 'not a zip');
 
-  assert.deepEqual((await zipEntryNames(claudeZip)).sort(), ['conversations.json', 'users.json']);
+  assert.deepEqual((await zipEntryNames(oldStyleZip)).sort(), ['conversations.json', 'users.json']);
   assert.equal(await mightBeClaudeExport(claudeZip), true);
+  assert.equal(await mightBeClaudeExport(oldStyleZip), true);
   assert.equal(await mightBeClaudeExport(otherZip), false);
 
-  const first = await findCandidateZips(downloads, {});
-  assert.deepEqual(first.map((z) => path.basename(z.file)).sort(), ['data-2026-09-28.zip', 'holiday-photos.zip']);
-  const seen = Object.fromEntries(first.map((z) => [z.key, true]));
-  assert.deepEqual(await findCandidateZips(downloads, seen), []);
+  const first = await findCandidateFiles(downloads, {});
+  assert.deepEqual(first.map((c) => path.basename(c.file)).sort(), ['conversations-000.zip', 'data-2026-09-28.zip', 'holiday-photos.zip', 'manifest.json']);
+  const seen = Object.fromEntries(first.map((c) => [c.key, true]));
+  assert.deepEqual(await findCandidateFiles(downloads, seen), []);
 
-  const chats = await readClaudeExportFile(claudeZip);
-  assert.equal(chats.length, 1);
+  const result = await readExportFile(claudeZip);
+  assert.equal(result.kind, 'chats');
+  assert.equal(result.part, 0);
+  assert.equal(result.chats.length, 1);
 });
 
-test('working state: automatic, pinned, done and archived', () => {
-  const now = Date.parse('2026-09-28T12:00:00Z');
-  const recent = { updatedAt: now - 2 * DAY };
-  const old = { updatedAt: now - 30 * DAY };
-  assert.equal(workingState(recent, {}, 7, now), 'working');
-  assert.equal(workingState(old, {}, 7, now), 'idle');
-  assert.equal(workingState(old, {}, 60, now), 'working');
-  assert.equal(workingState(old, { pinned: true }, 7, now), 'working');
-  assert.equal(workingState(recent, { done: true }, 7, now), 'done');
-  assert.equal(workingState({ ...recent, archived: true }, {}, 7, now), 'done');
-});
+// ---- store ----
 
-test('store: saves marks and settings, and survives a restart', () => {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'acm-store-')), 'state.json');
+test('store: marks, seen times, settings and chat merging survive a restart', () => {
+  const file = path.join(tmpDir('acm-store-'), 'state.json');
   const store = new Store(file);
   store.setMark('chat:1', 'pinned');
   store.setMark('chat:2', 'done');
   store.setMark('chat:2', 'auto');
-  store.updateSettings({ workingDays: 0 });
+  store.updateSettings({ recentDays: 0, themeMode: 'dark', themeColor: 'teal', compact: true });
+  store.updateSettings({ themeMode: 'neon', themeColor: 'plaid' }); // ignored
+  store.markSeen(['code:1']);
+  store.setChats([{ id: 'chat:a' }, { id: 'chat:b' }], { file: 'conversations-000.zip' });
+  store.setChats([{ id: 'chat:c' }], { file: 'conversations-001.zip' }, { merge: true });
+
   const reopened = new Store(file);
   assert.deepEqual(reopened.override('chat:1'), { pinned: true });
   assert.deepEqual(reopened.override('chat:2'), {});
-  assert.equal(reopened.settings.workingDays, 1);
-  assert.equal(reopened.settings.watchDownloads, true);
+  assert.equal(reopened.settings.recentDays, 1);
+  assert.equal(reopened.settings.themeMode, 'dark');
+  assert.equal(reopened.settings.themeColor, 'teal');
+  assert.equal(reopened.settings.compact, true);
+  assert.ok(reopened.seenAt('code:1') >= reopened.data.installedAt);
+  assert.deepEqual(reopened.data.chats.map((c) => c.id), ['chat:a', 'chat:b', 'chat:c']);
+  assert.equal(reopened.data.lastImport.count, 3);
+});
+
+test('store: upgrades settings saved by version 0.1', () => {
+  const file = path.join(tmpDir('acm-old-'), 'state.json');
+  fs.writeFileSync(file, JSON.stringify({ settings: { workingDays: 14, watchDownloads: false }, seenZips: { a: true }, overrides: {} }));
+  const store = new Store(file);
+  assert.equal(store.settings.recentDays, 14);
+  assert.equal(store.settings.watchDownloads, false);
+  assert.equal(store.settings.workingDays, undefined);
+  assert.deepEqual(store.data.seenFiles, { a: true });
+  assert.ok(store.data.installedAt > 0, 'replies from before the upgrade are not flagged as new');
 });

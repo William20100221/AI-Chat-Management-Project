@@ -23,8 +23,8 @@ function user(text, timestamp, extra = {}) {
   return { type: 'user', timestamp, sessionId: 's', cwd: 'C:\\proj', message: { role: 'user', content: text }, ...extra };
 }
 
-function assistant(text, timestamp) {
-  return { type: 'assistant', timestamp, message: { role: 'assistant', content: [{ type: 'text', text }] } };
+function assistant(text, timestamp, stopReason = 'end_turn') {
+  return { type: 'assistant', timestamp, message: { role: 'assistant', stop_reason: stopReason, content: [{ type: 'text', text }] } };
 }
 
 function write(file, content) {

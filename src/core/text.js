@@ -10,6 +10,26 @@ function truncate(text, max = SNIPPET_LENGTH) {
   return clean.length > max ? clean.slice(0, max - 1).trimEnd() + '…' : clean;
 }
 
+// Replies are Markdown; previews read better without the ** and ## symbols.
+function plainText(text) {
+  return String(text || '')
+    .replace(/```[\w-]*\n?/g, '')
+    .replace(/`([^`\n]+)`/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '• ')
+    .replace(/^\s*\|?(\s*:?-{3,}:?\s*\|)+\s*(:?-{3,}:?)?\s*\|?\s*$/gm, '')
+    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '$2')
+    .replace(/(^|[\s(])[*_](?=\S)([^*_\n]*?\S)[*_](?=[\s).,!?:;]|$)/gm, '$1$2');
+}
+
+// A short, plain-text version of a message for the preview panel.
+function snippet(text, max = SNIPPET_LENGTH) {
+  return truncate(plainText(text), max);
+}
+
 // Message content is either a plain string or an array of blocks ({type: 'text', text}, images, tool calls...).
 // With images: true, a message that is only pictures becomes "[2 images]" so it still shows up.
 function contentText(content, { images: showImages = true } = {}) {
@@ -35,4 +55,4 @@ function toMillis(value) {
   return Number.isNaN(ms) ? null : ms;
 }
 
-module.exports = { truncate, contentText, toMillis, SNIPPET_LENGTH };
+module.exports = { truncate, plainText, snippet, contentText, toMillis, SNIPPET_LENGTH };

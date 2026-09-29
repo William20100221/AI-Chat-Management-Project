@@ -1,30 +1,56 @@
 'use strict';
 
-// The app's own saved data: settings, what you pinned or marked done, and the last imported chat export.
+// The app's own saved data: settings, what you pinned, marked done or already looked at,
+// and the chats from your Claude data export.
 // Kept in one JSON file in the app's data folder (on Windows: %APPDATA%\AI Chat Manager\state.json).
 
 const fs = require('fs');
 const path = require('path');
 
-const DEFAULTS = {
-  settings: { workingDays: 7, watchDownloads: true },
-  overrides: {}, // item id → { pinned?: true, done?: true }
-  chats: [], // chats from the newest Claude data export
-  lastImport: null, // { file, fileMtime, importedAt, count }
-  seenZips: {}, // zips in Downloads we already looked at
+const THEME_MODES = ['system', 'light', 'dark'];
+const THEME_COLORS = ['indigo', 'teal', 'green', 'amber', 'rose', 'violet', 'graphite'];
+
+const DEFAULT_SETTINGS = {
+  recentDays: 7,
+  watchDownloads: true,
+  themeMode: 'system',
+  themeColor: 'indigo',
+  compact: false,
+  keepOnTop: false,
 };
+
+function defaults() {
+  return {
+    settings: { ...DEFAULT_SETTINGS },
+    overrides: {}, // item id → { pinned: true } | { done: true, at }
+    seen: {}, // item id → when you last looked at it
+    installedAt: Date.now(), // replies finished before this count as already seen
+    chats: [], // chats from your Claude data export
+    lastImport: null, // { file, fileMtime, importedAt, count }
+    pendingExport: null, // download links from an export manifest you haven't used yet
+    seenFiles: {}, // files in Downloads we already looked at
+    windowBounds: {}, // { full, compact } → { x, y, width, height }
+  };
+}
 
 class Store {
   constructor(file) {
     this.file = file;
-    this.data = structuredClone(DEFAULTS);
+    this.data = defaults();
     try {
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
+      if (saved.settings && saved.settings.workingDays && !saved.settings.recentDays) {
+        settings.recentDays = saved.settings.workingDays; // renamed in 0.2
+      }
+      delete settings.workingDays;
       this.data = {
         ...this.data,
         ...saved,
-        settings: { ...DEFAULTS.settings, ...(saved.settings || {}) },
+        settings,
+        seenFiles: saved.seenFiles || saved.seenZips || {},
       };
+      delete this.data.seenZips;
     } catch {
       // first run, or an unreadable file: start fresh
     }
@@ -46,10 +72,14 @@ class Store {
     return this.data.settings;
   }
 
-  updateSettings(patch) {
+  updateSettings(patch = {}) {
     const next = { ...this.data.settings };
-    if (Number.isFinite(patch.workingDays)) next.workingDays = Math.min(365, Math.max(1, Math.round(patch.workingDays)));
-    if (typeof patch.watchDownloads === 'boolean') next.watchDownloads = patch.watchDownloads;
+    if (Number.isFinite(patch.recentDays)) next.recentDays = Math.min(365, Math.max(1, Math.round(patch.recentDays)));
+    for (const key of ['watchDownloads', 'compact', 'keepOnTop']) {
+      if (typeof patch[key] === 'boolean') next[key] = patch[key];
+    }
+    if (THEME_MODES.includes(patch.themeMode)) next.themeMode = patch.themeMode;
+    if (THEME_COLORS.includes(patch.themeColor)) next.themeColor = patch.themeColor;
     this.data.settings = next;
     this.save();
   }
@@ -62,20 +92,51 @@ class Store {
   setMark(id, mark) {
     if (mark === 'auto') delete this.data.overrides[id];
     else if (mark === 'pinned') this.data.overrides[id] = { pinned: true };
-    else if (mark === 'done') this.data.overrides[id] = { done: true };
+    else if (mark === 'done') this.data.overrides[id] = { done: true, at: Date.now() };
     this.save();
   }
 
-  setChats(chats, info) {
-    this.data.chats = chats;
-    this.data.lastImport = info;
+  seenAt(id) {
+    return Math.max(this.data.seen[id] || 0, this.data.installedAt || 0);
+  }
+
+  markSeen(ids) {
+    const now = Date.now();
+    for (const id of ids) this.data.seen[id] = now;
     this.save();
   }
 
-  markZipSeen(key) {
-    this.data.seenZips[key] = true;
+  // part 0 (or a single-file export) replaces your chats; later parts of the same export add to them.
+  setChats(chats, info, { merge = false } = {}) {
+    if (merge) {
+      const byId = new Map(this.data.chats.map((chat) => [chat.id, chat]));
+      for (const chat of chats) byId.set(chat.id, chat);
+      this.data.chats = [...byId.values()];
+    } else {
+      this.data.chats = chats;
+    }
+    this.data.lastImport = { ...info, count: this.data.chats.length };
+    this.save();
+  }
+
+  setPendingExport(pending) {
+    this.data.pendingExport = pending;
+    this.save();
+  }
+
+  markFileSeen(key) {
+    this.data.seenFiles[key] = true;
+    this.save();
+  }
+
+  windowBounds(mode) {
+    return this.data.windowBounds[mode] || null;
+  }
+
+  saveWindowBounds(mode, bounds) {
+    this.data.windowBounds[mode] = bounds;
     this.save();
   }
 }
 
-module.exports = { Store, DEFAULTS };
+module.exports = { Store, THEME_MODES, THEME_COLORS, DEFAULT_SETTINGS };
