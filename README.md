@@ -17,7 +17,7 @@ It **finds the AI platforms you use by itself**, then gets each one's chats: typ
 - **Recent** shows everything active in the last *X* days (you choose *X*). **Done** holds what you marked done; it comes back if something new happens.
 - Click an item to see its first message, last message and all of your questions, so you can tell which chat it is.
 - **Compact view** (the arrows button at the top) shrinks the window to a narrow list of titles. Click a title to open its details underneath. You can keep it on top of other windows.
-- **Look**: Material Design style, 7 colour themes, and light, dark or system mode (Settings → Appearance). Each platform has its own colour. Scrollbars are a thin line that only shows while you scroll (its length shows how much there is), and can be dragged.
+- **Look**: Material Design style, with the app drawing its own title bar (name, search and buttons in one strip; the window buttons take the theme’s colours). 7 colour themes, and light, dark or system mode (Settings → Appearance). Each platform has its own colour. Scrollbars are a thin line that only shows while you scroll (its length shows how much there is), and can be dragged.
 - Search covers titles *and* the questions you asked.
 
 Everything stays on your computer. The app only **reads** files; it never changes the AI apps' files and never sends anything anywhere.
@@ -280,7 +280,7 @@ src/main/main.js the app process: window (full and compact), first-run setup, fi
 build/           the app icon (icon.svg → icon.png) for the installers
 scripts/         build.js (the installers), make-icon.js
 src/preload.js   the small bridge the window is allowed to use
-src/renderer/    the window: platforms, list, details, settings, themes, thin scrollbars (scrollbars.js)
+src/renderer/    the window: its own title bar, platforms, list, details, settings, themes, thin scrollbars (scrollbars.js)
 test/            unit tests with fake user folders (Windows, Mac, Linux) and fake browser histories
 ```
 

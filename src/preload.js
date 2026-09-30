@@ -5,6 +5,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  platform: process.platform,
+  setTitleBar: (colors) => ipcRenderer.invoke('window:title-bar', colors),
   getSnapshot: () => ipcRenderer.invoke('snapshot:get'),
   search: (query) => ipcRenderer.invoke('items:search', query),
   getDetail: (id) => ipcRenderer.invoke('item:detail', id),

@@ -47,12 +47,24 @@
       return { travel, room: scrollHeight - clientHeight };
     }
 
+    // Out of the way while hidden: a line left where a pane used to be (the details pane, after
+    // switching to compact view) would make the whole window scrollable.
+    function park() {
+      if (bar.classList.contains('visible')) return;
+      bar.style.top = '0px';
+      bar.style.left = '0px';
+      bar.style.height = '0px';
+      thumb.style.height = '0px';
+    }
+
     function show() {
       if (!layout()) return;
       bar.classList.add('visible');
       clearTimeout(hideTimer);
       hideTimer = setTimeout(() => {
-        if (!dragging) bar.classList.remove('visible');
+        if (dragging) return;
+        bar.classList.remove('visible');
+        hideTimer = setTimeout(park, 500); // after the fade-out
       }, HIDE_AFTER_MS);
     }
 

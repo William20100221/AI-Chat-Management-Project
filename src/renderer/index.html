@@ -7,8 +7,13 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- The window's own title bar: drag it to move the window, double-click to maximize. The
+       system's minimize / maximize / close buttons sit over its right end (a Mac's, on the left). -->
   <header class="app-bar">
-    <h1 class="app-title">AI Chat Manager</h1>
+    <div class="brand">
+      <img class="app-logo" src="logo.svg" alt="">
+      <h1 class="app-title">AI Chat Manager</h1>
+    </div>
     <label class="search-bar">
       <span data-icon="search"></span>
       <input id="search" type="search" placeholder="Search titles and questions" autocomplete="off">

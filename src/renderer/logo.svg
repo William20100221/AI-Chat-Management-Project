@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="100 100 824 824">
+  <!-- The app icon (build/icon.svg) cropped to its tile and without the shadow, for the title bar. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6573f2"/>
+      <stop offset="1" stop-color="#3b32b5"/>
+    </linearGradient>
+    <linearGradient id="note" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fffbe6"/>
+      <stop offset="1" stop-color="#ffe9a3"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <g transform="rotate(-5 512 520)">
+    <path d="M280 250 H708 A36 36 0 0 1 744 286 V604 L588 760 H280 A36 36 0 0 1 244 724 V286 A36 36 0 0 1 280 250 Z" fill="url(#note)"/>
+    <path d="M744 604 L588 760 V652 A48 48 0 0 1 636 604 Z" fill="#f4cf5a"/>
+    <path d="M354 350 H616 A46 46 0 0 1 662 396 V536 A46 46 0 0 1 616 582 H470 L400 642 V582 H354 A46 46 0 0 1 308 536 V396 A46 46 0 0 1 354 350 Z" fill="#3b32b5"/>
+    <circle cx="410" cy="466" r="26" fill="#ffffff"/>
+    <circle cx="485" cy="466" r="26" fill="#ffffff"/>
+    <circle cx="560" cy="466" r="26" fill="#ffffff"/>
+  </g>
+</svg>

@@ -719,6 +719,37 @@ function applyAppearance() {
   toggle.title = compact ? 'Full view' : 'Compact view';
   toggle.setAttribute('aria-label', toggle.title);
   toggle.replaceChildren(icon(compact ? 'expand' : 'compact'));
+  syncTitleBar();
+}
+
+// The system's window buttons (Windows, Linux) are drawn over the title bar: give them the
+// theme's text colour, and tell them whether the theme is dark (for their hover shade).
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+let titleBarKey = null;
+function syncTitleBar() {
+  const mode = document.documentElement.dataset.mode;
+  const dark = mode === 'dark' || (mode !== 'light' && darkQuery.matches);
+  const symbolColor = hexColor(getComputedStyle(document.body).color);
+  const key = `${dark}|${symbolColor}`;
+  if (key === titleBarKey) return;
+  titleBarKey = key;
+  backend.setTitleBar({ dark, symbolColor });
+}
+
+// Any CSS colour (the theme uses oklch) as #rrggbb.
+let colorCanvas = null;
+function hexColor(css) {
+  colorCanvas = colorCanvas || document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  colorCanvas.clearRect(0, 0, 1, 1);
+  colorCanvas.fillStyle = css;
+  colorCanvas.fillRect(0, 0, 1, 1);
+  const [r, g, b] = colorCanvas.getImageData(0, 0, 1, 1).data;
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+
+// The search box is narrower in compact view.
+function fitSearchPlaceholder() {
+  $('#search').placeholder = isCompact() ? 'Search' : 'Search titles and questions';
 }
 
 // ---- snackbar ----
@@ -1117,6 +1148,13 @@ function fillStaticIcons() {
 
 function wire() {
   fillStaticIcons();
+  document.documentElement.dataset.os = backend.platform || '';
+  fitSearchPlaceholder();
+
+  // Like other windows, the title dims while another window is in front.
+  window.addEventListener('blur', () => document.documentElement.classList.add('inactive'));
+  window.addEventListener('focus', () => document.documentElement.classList.remove('inactive'));
+  darkQuery.addEventListener('change', syncTitleBar); // "System" mode follows the computer's setting
 
   for (const tabButton of document.querySelectorAll('#tabs button')) {
     tabButton.addEventListener('click', () => {
@@ -1182,6 +1220,7 @@ function wire() {
 
   // Switching between full and compact layout re-draws rows (titles only vs. two lines).
   compactQuery.addEventListener('change', () => {
+    fitSearchPlaceholder();
     render();
     if (!isCompact()) paintDetail(); // move the open details into the side panel
   });

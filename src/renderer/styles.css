@@ -54,6 +54,12 @@
   --shadow-2: 0 1px 2px rgb(0 0 0 / 0.3), 0 2px 6px 2px rgb(0 0 0 / 0.15);
   --font: "Segoe UI Variable Text", "Segoe UI", Roboto, system-ui, -apple-system, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI", Roboto, system-ui, sans-serif;
+
+  /* The window's own title bar (TITLE_BAR_HEIGHT in main.js), and the room the system's window
+     buttons take in it: on the right on Windows and Linux, on the left on a Mac. */
+  --title-bar-height: 48px;
+  --wco-left: env(titlebar-area-x, 0px);
+  --wco-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
 
 :root[data-mode="light"] { color-scheme: light; }
@@ -72,6 +78,7 @@
 html, body {
   height: 100%;
   margin: 0;
+  overflow: hidden; /* an app window: only the panes inside it scroll */
 }
 
 body {
@@ -101,35 +108,70 @@ button {
 
 [hidden] { display: none !important; }
 
-/* ---- top app bar ---- */
+/* ---- title bar: the app's name, search and buttons, drawn by the app itself ---- */
 
+/* Drag it to move the window; the search box and buttons stay clickable. The search sits in the
+   middle of the window, like a command bar. */
 .app-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) minmax(200px, 560px) minmax(max-content, 1fr);
+  grid-template-areas: "brand search actions";
   align-items: center;
   gap: 16px;
-  padding: 12px 16px 8px 24px;
+  height: var(--title-bar-height);
+  padding: 0 8px 0 24px;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.app-bar button, .app-bar input { -webkit-app-region: no-drag; }
+
+.brand {
+  grid-area: brand;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin-left: var(--wco-left);
+}
+
+.app-logo {
+  width: 22px;
+  height: 22px;
+  flex: none;
 }
 
 .app-title {
   margin: 0;
-  font: 400 22px/28px var(--font-display);
+  font: 600 14px/20px var(--font);
+  letter-spacing: 0.01em;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.15s;
 }
+
+.inactive .app-title { color: var(--on-surface-variant); }
+.inactive .app-logo { opacity: 0.7; }
 
 .search-bar {
-  flex: 1;
-  max-width: 560px;
-  height: 48px;
+  grid-area: search;
+  height: 36px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 16px;
-  border-radius: 28px;
+  gap: 10px;
+  padding: 0 14px;
+  border-radius: 18px;
   background: var(--surface-container-high);
   color: var(--on-surface-variant);
+  cursor: text;
+  -webkit-app-region: no-drag;
+  transition: background 0.15s;
 }
 
-.search-bar:focus-within { outline: 2px solid var(--primary); outline-offset: -2px; }
+.search-bar:hover { background: var(--surface-container-highest); }
+.search-bar:focus-within { background: var(--surface-container-lowest); outline: 2px solid var(--primary); outline-offset: -2px; }
+.search-bar .icon { width: 18px; height: 18px; }
 
 .search-bar input {
   flex: 1;
@@ -139,16 +181,20 @@ button {
   background: transparent;
   color: var(--on-surface);
   font: inherit;
-  font-size: 15px;
 }
 
 .search-bar input::placeholder { color: var(--on-surface-variant); }
+.search-bar input::-webkit-search-cancel-button { cursor: pointer; }
 
 .app-actions {
-  margin-left: auto;
+  grid-area: actions;
+  justify-self: end;
   display: flex;
-  gap: 4px;
+  gap: 2px;
+  margin-right: var(--wco-right);
 }
+
+.app-actions .icon-button { width: 36px; height: 36px; }
 
 .icon-button {
   width: 40px;
@@ -172,7 +218,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 4px 24px 12px;
+  padding: 8px 24px 12px;
   flex-wrap: wrap;
 }
 
@@ -694,9 +740,11 @@ button {
 
 /* ---- settings dialog ---- */
 
+/* Centred below the title bar, so the window buttons never sit on top of a dialog. */
 .dialog {
+  top: var(--title-bar-height);
   width: min(600px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
+  max-height: calc(100vh - var(--title-bar-height) - 24px);
   border: 0;
   border-radius: 28px;
   padding: 0;
@@ -899,21 +947,20 @@ button {
 /* ---- compact view: just the titles, details open under the row you click ---- */
 
 @media (max-width: 719px) {
+  /* Two rows: the title bar, then search and the buttons. */
   .app-bar {
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 8px 8px 4px 16px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: var(--title-bar-height) auto;
+    grid-template-areas: "brand brand" "search actions";
+    gap: 0 6px;
+    height: auto;
+    padding: 0 8px 4px 12px;
   }
 
-  .app-title { font-size: 18px; line-height: 24px; }
+  .brand { margin-right: var(--wco-right); }
+  .app-actions { margin-right: 0; gap: 0; }
 
-  .search-bar {
-    order: 3;
-    flex-basis: 100%;
-    max-width: none;
-    height: 40px;
-    margin-right: 8px;
-  }
+  .search-bar { height: 38px; }
 
   .filters {
     flex-direction: column;

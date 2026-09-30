@@ -19,6 +19,7 @@ const WINDOW_SIZES = {
   full: { width: 1180, height: 760 },
   compact: { width: 380, height: 680 },
 };
+const TITLE_BAR_HEIGHT = 48; // the window's own title bar: --title-bar-height in styles.css
 
 let win = null;
 let store = null;
@@ -385,6 +386,26 @@ function applyTheme() {
   nativeTheme.themeSource = store.settings.themeMode;
 }
 
+// The window draws its own title bar (.app-bar in the window). Windows and Linux keep the system's
+// minimize / maximize / close buttons over its right end, so Snap layouts and closing during a
+// dialog keep working; a Mac keeps its traffic lights on the left.
+function titleBarOverlay(dark, symbolColor) {
+  return {
+    // see-through, so the window's own title bar shows behind the buttons; white or black tells
+    // the system which way to shade them on hover
+    color: dark ? 'rgba(0, 0, 0, 0)' : 'rgba(255, 255, 255, 0)',
+    symbolColor: symbolColor || (dark ? '#e3e1ec' : '#1b1b21'),
+    height: TITLE_BAR_HEIGHT,
+  };
+}
+
+function titleBarOptions() {
+  if (process.platform === 'darwin') {
+    return { titleBarStyle: 'hidden', titleBarOverlay: true, trafficLightPosition: { x: 18, y: 16 } };
+  }
+  return { titleBarStyle: 'hidden', titleBarOverlay: titleBarOverlay(nativeTheme.shouldUseDarkColors) };
+}
+
 function onScreen(bounds) {
   return screen.getAllDisplays().some(({ workArea: a }) => (
     bounds.x < a.x + a.width - 40 && bounds.x + bounds.width > a.x + 40
@@ -434,6 +455,12 @@ function requireItem(id) {
 
 function registerIpc() {
   ipcMain.handle('snapshot:get', () => snapshot());
+
+  // The theme changed: recolour the system's window buttons to match.
+  ipcMain.handle('window:title-bar', (_e, { dark, symbolColor } = {}) => {
+    if (process.platform === 'darwin' || !/^#[0-9a-f]{6}$/i.test(String(symbolColor))) return;
+    win.setTitleBarOverlay(titleBarOverlay(Boolean(dark), symbolColor));
+  });
 
   // Matches titles and your questions; returns the ids that match (null means "no filter").
   ipcMain.handle('items:search', (_e, query) => {
@@ -695,6 +722,7 @@ function createWindow() {
     minHeight: 420,
     title: 'AI Chat Manager',
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#131318' : '#fbf8ff',
+    ...titleBarOptions(),
     show: false,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
