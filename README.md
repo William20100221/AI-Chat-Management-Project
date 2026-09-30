@@ -25,6 +25,7 @@ Everything stays on your computer. The app only **reads** files; it never change
 ## Install
 
 No typing, no `npm`: download the installer for your computer and double-click it.
+https://github.com/William20100221/AI-Chat-Management-Project/releases
 
 | Computer | File | What happens |
 |---|---|---|
