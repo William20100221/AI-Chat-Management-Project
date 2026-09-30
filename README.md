@@ -5,7 +5,7 @@ A sticky note for your AI chats, across AI platforms. It shows which chats and s
 It **finds the AI platforms you use by itself**, then gets each one's chats: types, titles, dates and more. Platforms it knows: **Claude**, **ChatGPT**, **Gemini**, **Microsoft Copilot**, **Perplexity**, **DeepSeek**, **Grok**, **Le Chat** (Mistral) and **Poe**.
 
 - **Platforms:** the row under the tabs shows *the platforms you use*, for example *All platforms · Claude · ChatGPT · Gemini · More*.
-  - A platform counts as used when the app finds it on this computer (an AI app or its files), in your browser history, through the browser extension, or in a data export. **Settings → Your AI platforms** lists them, and how each was found.
+  - A platform counts as used when the app finds it on this computer (an AI app or its files), finds its chats in your browser history (just visiting the site doesn't count), through the browser extension, or in a data export. **Settings → Your AI platforms** lists them, and how each was found.
   - Click a platform to **go into it**: you see only its chats, plus the types you have there (Claude: Chat · Cowork · Code; ChatGPT: Chat · Work · Codex; Gemini: Chat · CLI). Types you don't use are hidden.
   - **← All platforms**, or the **Esc** key, takes you back.
   - **More** lists every platform, the ones you don't use marked *not found yet*, with a search box.
@@ -53,7 +53,7 @@ Everything can be changed later in Settings, which also has *Run the first-run s
 
 ### Uninstall
 
-- **Windows:** Settings → Apps → AI Chat Manager → Uninstall. Your data stays in `%APPDATA%\AI Chat Manager`; delete that folder too to remove everything.
+- **Windows:** Settings → Apps → AI Chat Manager → Uninstall. This also deletes the app's data (`%APPDATA%\AI Chat Manager`: settings, pins, imported exports), so installing it again starts with the first-run setup. Installing a newer version over the old one keeps everything.
 - **Mac:** drag AI Chat Manager from Applications to the Bin. Your data is in `~/Library/Application Support/AI Chat Manager`.
 
 ## Where the data comes from

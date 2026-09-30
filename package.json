@@ -1,7 +1,7 @@
 {
   "name": "ai-chat-manager",
   "productName": "AI Chat Manager",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "A sticky note for your AI chats across platforms: finds the AI platforms you use and shows which chats and sessions need you.",
   "private": true,
   "main": "src/main/main.js",
@@ -64,7 +64,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "AI Chat Manager",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": true
     },
     "mac": {
       "target": [

@@ -343,7 +343,7 @@ function renderStatus() {
   if (replying) parts.push(`${replying} replying now`);
   for (const p of usedPlatforms()) {
     const count = snap.items.filter((i) => i.platform === p.id).length;
-    parts.push(`${p.name} ${count}`);
+    if (count) parts.push(`${p.name} ${count}`); // e.g. an app installed but no chats yet: nothing to count
   }
   const ext = snap.connections && snap.connections.extension;
   if (ext && ext.connected) parts.push(`websites linked (${ext.browser || 'browser'})`);

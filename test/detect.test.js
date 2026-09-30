@@ -207,7 +207,8 @@ test('detection: other AI apps, and which platforms you use and how the app know
   assert.deepEqual(usage.gemini.signs, ['Gemini CLI: 1 session', 'Browser history (Microsoft Edge, Firefox): 3 chats']);
   assert.deepEqual(usage.copilot.signs, ['Microsoft Copilot app is installed']);
   assert.equal(usage.copilot.used, true, 'installed counts, even with no chats yet');
-  assert.equal(usage.deepseek.used, true, 'visited counts too');
+  assert.equal(usage.deepseek.used, false, 'visiting the site without opening a chat doesn’t count');
+  assert.deepEqual(usage.deepseek.signs, []);
   assert.equal(usage.chatgpt.used, false, 'nothing found');
   assert.equal(usage.claude.used, true, 'it has items');
   assert.deepEqual(usage.claude.signs, ['Claude Desktop is installed'], 'said once');

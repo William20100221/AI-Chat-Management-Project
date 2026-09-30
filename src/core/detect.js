@@ -90,10 +90,9 @@ function platformUsage(items, sources) {
   }
   for (const [platformId, h] of Object.entries(history)) {
     const u = usage[platformId];
-    if (!u) continue;
-    u.signs.push(h.chats
-      ? `Browser history (${h.browsers.join(', ')}): ${countText(h.chats, 'chat')}`
-      : `Browser history (${h.browsers.join(', ')}): visited, no chats opened`);
+    // Only chats count: visiting a site (its home page, a link someone sent) doesn't mean you use it.
+    if (!u || !h.chats) continue;
+    u.signs.push(`Browser history (${h.browsers.join(', ')}): ${countText(h.chats, 'chat')}`);
   }
   for (const u of Object.values(usage)) u.used = u.items > 0 || u.signs.length > 0;
   return usage;
