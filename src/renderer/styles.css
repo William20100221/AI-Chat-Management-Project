@@ -545,6 +545,18 @@ button {
 
 .row-trail .icon { width: 16px; height: 16px; color: var(--primary); }
 
+/* Open the chat itself: shows on the row you point at or picked, and when tabbed to. */
+.row-open { width: 32px; height: 32px; margin: -6px -4px -6px 0; opacity: 0; transition: opacity 0.12s; }
+.row-trail .row-open .icon { width: 18px; height: 18px; color: var(--on-surface-variant); }
+.row:hover .row-open, .row.selected .row-open, .row-open:focus-visible { opacity: 1; }
+.row-open:hover .icon { color: var(--primary); }
+
+/* What you searched for, like a highlighter pen: the same yellow in every theme. */
+::highlight(search) {
+  background-color: light-dark(oklch(0.9 0.13 95), oklch(0.5 0.11 90));
+  color: light-dark(oklch(0.2 0.03 90), oklch(0.98 0.01 90));
+}
+
 .dot {
   width: 10px;
   height: 10px;

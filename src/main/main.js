@@ -60,6 +60,7 @@ function snapshot() {
       mark: override.pinned ? 'pinned' : override.done ? 'done' : 'auto',
       questionCount: item.questions.length,
       untitled: Boolean(item.untitled),
+      canOpenChat: Boolean(item.url),
     };
   });
   const usage = platformUsage([...items.values()], sources);

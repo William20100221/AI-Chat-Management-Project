@@ -129,6 +129,40 @@ function describeItem(item) {
   return `${platformOf(item.platform).name} \u00b7 ${typeName(item)}`;
 }
 
+// Work and Codex chats open in the ChatGPT app; everything else on the website.
+function openPlace(item) {
+  return item.source === 'work' || item.source === 'codex' ? 'ChatGPT app' : platformOf(item.platform).name;
+}
+
+async function openChat(id) {
+  const result = await backend.openChat(id);
+  if (result && result.error) snackbar(result.error, 'error');
+}
+
+// Marks what you searched for in titles, questions and messages. Uses the CSS Custom Highlight
+// API, so the text itself is never re-built. Same rule as the search: the whole phrase, any case.
+function highlightSearch() {
+  if (!window.CSS || !CSS.highlights) return;
+  const query = $('#search').value.trim();
+  const ranges = [];
+  if (query) {
+    const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+    for (const root of document.querySelectorAll('.row-title, .detail-title, .message, .questions li')) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (node.parentElement.closest('.who, .when')) continue; // labels and dates, not chat text
+        for (const match of node.data.matchAll(pattern)) {
+          const range = new Range();
+          range.setStart(node, match.index);
+          range.setEnd(node, match.index + match[0].length);
+          ranges.push(range);
+        }
+      }
+    }
+  }
+  CSS.highlights.set('search', new Highlight(...ranges));
+}
+
 // ---- which items show ----
 
 function matchesFilters(item) {
@@ -307,6 +341,19 @@ function rowFor(item) {
   const indicator = stateIndicator(item);
   if (indicator) trail.append(indicator);
   trail.append(el('span', null, isCompact() ? shortTime(item.updatedAt) : relative(item.updatedAt)));
+  if (item.canOpenChat) {
+    // Straight to the chat itself, without opening the details first.
+    const go = el('button', 'icon-button row-open');
+    go.type = 'button';
+    go.title = `Open in ${openPlace(item)}`;
+    go.setAttribute('aria-label', go.title);
+    go.append(icon('openInNew'));
+    go.addEventListener('click', (event) => {
+      event.stopPropagation(); // not a click on the row
+      openChat(item.id);
+    });
+    trail.append(go);
+  }
 
   row.append(avatar, main, trail, icon('expandMore', 'chevron'));
   row.addEventListener('click', () => open(item.id));
@@ -333,6 +380,7 @@ function renderList() {
   $('#list').replaceChildren(...nodes);
   renderEmpty(items.length);
   if (isCompact()) paintDetail(); // the row's detail holder was just re-created
+  highlightSearch();
 }
 
 function renderStatus() {
@@ -567,16 +615,7 @@ function buildDetail(detail, item) {
       button(done ? 'Not done' : 'Done', { iconName: 'taskAlt', kind: done ? 'active' : 'tonal', onClick: () => backend.mark(item.id, done ? 'auto' : 'done') }),
     );
     if (detail.canOpenChat) {
-      // Work and Codex chats open in the ChatGPT app; everything else on the website.
-      const where = about.source === 'work' || about.source === 'codex' ? 'ChatGPT app' : platformOf(about.platform).name;
-      actions.append(button(`Open in ${where}`, {
-        iconName: 'openInNew',
-        kind: 'outlined',
-        onClick: async () => {
-          const result = await backend.openChat(detail.id);
-          if (result && result.error) snackbar(result.error, 'error');
-        },
-      }));
+      actions.append(button(`Open in ${openPlace(about)}`, { iconName: 'openInNew', kind: 'outlined', onClick: () => openChat(detail.id) }));
     }
     if (detail.canOpenFolder) actions.append(button('Folder', { iconName: 'folder', kind: 'outlined', onClick: () => backend.openFolder(detail.id) }));
     if (detail.resumeCommand) {
@@ -616,6 +655,7 @@ function buildDetail(detail, item) {
       more.addEventListener('click', () => {
         detail.questions.slice(limit).forEach(addQuestion);
         more.remove();
+        highlightSearch();
       });
       nodes.push(more);
     }
@@ -662,6 +702,7 @@ function paintDetail() {
   if (!lastDetail || lastDetail.id !== view.selectedId) return;
   const target = detailTarget();
   if (target) target.replaceChildren(...buildDetail(lastDetail, snap.items.find((i) => i.id === lastDetail.id)));
+  highlightSearch();
 }
 
 function clearDetail() {
