@@ -6,7 +6,7 @@ const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, scree
 const { Scanner } = require('../core/scanner');
 const { Store } = require('../core/store');
 const { itemState } = require('../core/status');
-const { readExportFile, findCandidateFiles, mightBeClaudeExport } = require('../core/chatExport');
+const { readExportFile, findCandidateFiles, mightBeClaudeExport, fileKey, keepExportFile } = require('../core/chatExport');
 const { applyWebEvents, combineChats } = require('../core/webChats');
 const { startBridge } = require('../core/webBridge');
 const { ExtensionLink } = require('../core/extensionLink');
@@ -18,6 +18,11 @@ const RESCAN_EVERY_MS = 30 * 1000;
 const WINDOW_SIZES = {
   full: { width: 1180, height: 760 },
   compact: { width: 380, height: 680 },
+};
+// Where you ask for your data export. Only you can: the app never uses your login on these sites.
+const EXPORT_PAGES = {
+  claude: 'https://claude.ai/settings/data-privacy-controls',
+  chatgpt: 'https://chatgpt.com/#settings/DataControls',
 };
 const TITLE_BAR_HEIGHT = 48; // the window's own title bar: --title-bar-height in styles.css
 
@@ -69,6 +74,7 @@ function snapshot() {
     sources: [...sources, browserSource()].map(({ label, path: p, found, count, errors, lastError, fields, note }) => ({ label, path: p, found, count, errors, lastError, fields, note })),
     settings: store.settings,
     lastImports: store.data.lastImports,
+    exportsFolder: exportsFolder(),
     platforms: describePlatforms().map((p) => ({ ...p, ...usage[p.id] })),
     pendingExport: store.data.pendingExport
       ? { createdAt: store.data.pendingExport.createdAt, opened: Boolean(store.data.pendingExport.openedAt) }
@@ -230,6 +236,21 @@ function rememberManifest(manifest) {
   send('notice', { kind: 'ok', text: 'Your Claude export is ready. Click "Download chats" to get it.' });
 }
 
+// All export files live in one folder (Documents, so they outlast an uninstall).
+function exportsFolder() {
+  return path.join(app.getPath('documents'), 'AI Chat Manager', 'Exports');
+}
+
+// Moves a recognised export file there, and remembers it as already checked in its new place.
+async function keepExport(file) {
+  try {
+    const kept = await keepExportFile(file, exportsFolder());
+    store.markFileSeen(fileKey(kept, fs.statSync(kept)));
+  } catch {
+    // can't move it (in use, no permission): it's imported anyway, and stays where it is
+  }
+}
+
 async function waitUntilStable(file) {
   const before = fs.statSync(file).size;
   await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -241,8 +262,10 @@ async function checkDownloads() {
   if (!started || !store.settings.watchDownloads || checkingDownloads) return;
   checkingDownloads = true;
   try {
-    const candidates = await findCandidateFiles(app.getPath('downloads'), store.data.seenFiles);
-    for (const candidate of candidates) {
+    // The exports folder first (after a reinstall, its exports come back in), then Downloads.
+    const kept = await findCandidateFiles(exportsFolder(), store.data.seenFiles, Infinity);
+    const downloads = await findCandidateFiles(app.getPath('downloads'), store.data.seenFiles);
+    for (const candidate of [...kept.map((c) => ({ ...c, kept: true })), ...downloads]) {
       try {
         if (candidate.kind === 'zip') {
           if (!(await mightBeClaudeExport(candidate.file))) {
@@ -255,12 +278,13 @@ async function checkDownloads() {
         store.markFileSeen(candidate.key);
         if (!result) continue;
         if (result.kind === 'manifest') {
-          rememberManifest(result.manifest);
+          if (!candidate.kept) rememberManifest(result.manifest); // a kept one's links have expired
         } else {
           const last = store.lastImport(result.platform || 'claude');
           const newer = !last || candidate.mtimeMs > (last.fileMtime || 0);
           if (result.part > 0 || newer) await importChats(result, candidate.file, candidate.mtimeMs);
         }
+        if (!candidate.kept) await keepExport(candidate.file);
       } catch {
         store.markFileSeen(candidate.key); // unreadable: don't retry until the file changes
       }
@@ -577,10 +601,11 @@ function registerIpc() {
       if (!parsed) return { ok: false, error: 'That file is not a Claude data export.' };
       if (parsed.kind === 'manifest') {
         rememberManifest(parsed.manifest);
-        return { ok: true };
+      } else {
+        await importChats(parsed, file, fs.statSync(file).mtimeMs);
       }
-      await importChats(parsed, file, fs.statSync(file).mtimeMs);
-      return { ok: true, count: parsed.chats.length };
+      await keepExport(file);
+      return { ok: true, count: parsed.chats ? parsed.chats.length : undefined };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -600,6 +625,17 @@ function registerIpc() {
   ipcMain.handle('export:dismiss', () => {
     store.setPendingExport(null);
     pushSnapshot();
+  });
+
+  // Opens the page where you ask for an export; the platform emails you the link, and the
+  // download is picked up from there automatically.
+  ipcMain.handle('export:request', async (_e, platform) => {
+    if (EXPORT_PAGES[platform]) await shell.openExternal(EXPORT_PAGES[platform]);
+  });
+
+  ipcMain.handle('export:open-folder', async () => {
+    fs.mkdirSync(exportsFolder(), { recursive: true });
+    await shell.openPath(exportsFolder());
   });
 
   // ---- Testing panel (temporary) ----

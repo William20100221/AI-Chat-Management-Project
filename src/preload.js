@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('api', {
   importExport: () => ipcRenderer.invoke('export:import'),
   downloadExport: () => ipcRenderer.invoke('export:download'),
   dismissExport: () => ipcRenderer.invoke('export:dismiss'),
+  requestExport: (platform) => ipcRenderer.invoke('export:request', platform),
+  openExportsFolder: () => ipcRenderer.invoke('export:open-folder'),
   refresh: () => ipcRenderer.invoke('scan:refresh'),
   openSource: (index) => ipcRenderer.invoke('source:open', index),
   openExtensionFolder: () => ipcRenderer.invoke('extension:open-folder'),

@@ -168,6 +168,54 @@ async function parseTranscript(filePath) {
   return summary;
 }
 
+// Claude Code's own note of each running session: ~/.claude/sessions/<pid>.json, with its state:
+// busy or shell (working), waiting (needs you: a question, a permission prompt) or idle. Only the
+// .json files are read; the .key files next to them hold connection tokens. Notes left behind by
+// a session whose process has ended are skipped. Returns sessionId → state.
+async function readLiveSessions(dir, isAlive = processAlive) {
+  const live = new Map();
+  let names;
+  try {
+    names = await fs.promises.readdir(dir);
+  } catch {
+    return live;
+  }
+  for (const name of names) {
+    if (!/^\d+\.json$/.test(name)) continue;
+    try {
+      const note = JSON.parse(await fs.promises.readFile(`${dir}/${name}`, 'utf8'));
+      if (note.sessionId && isAlive(note.pid)) live.set(note.sessionId, note.status);
+    } catch {
+      // being rewritten: the next scan reads it
+    }
+  }
+  return live;
+}
+
+// ponytail: a crashed session's pid reused by another process looks alive until Claude Code
+// rewrites the note; compare the note's procStart with the process start time if that shows up.
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM'; // exists, just not ours to signal
+  }
+}
+
+// What Claude Code says about a running session beats guessing from its transcript: a long tool
+// run can go quiet for minutes, and a permission prompt looks like a turn still in progress.
+function withLiveState(activity, state, now = Date.now()) {
+  if (!activity || !state) return activity;
+  if (state === 'busy' || state === 'shell') return { ...activity, pending: true, asking: null, lastWriteAt: now };
+  if (state === 'waiting') {
+    const asking = activity.asking || { text: 'Claude is waiting for your answer or approval', at: now };
+    return { ...activity, pending: false, asking, lastWriteAt: now };
+  }
+  if (state === 'idle') return { ...activity, pending: false };
+  return activity;
+}
+
 function transcriptTitle(summary) {
   if (!summary) return null;
   if (summary.customTitle) return summary.customTitle;
@@ -177,4 +225,4 @@ function transcriptTitle(summary) {
   return first ? truncate(first.text, 80) : null;
 }
 
-module.exports = { parseTranscript, transcriptTitle, applyEntry, emptySummary, endsWithQuestion };
+module.exports = { parseTranscript, transcriptTitle, applyEntry, emptySummary, endsWithQuestion, readLiveSessions, withLiveState };

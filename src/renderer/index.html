@@ -80,7 +80,7 @@
       </label>
       <label class="setup-choice">
         <input id="setup-downloads" type="checkbox" class="switch" checked>
-        <span><strong>Data exports in Downloads</strong><br><span class="help small">When you download your Claude or ChatGPT data export, it's imported automatically.</span></span>
+        <span><strong>Data exports in Downloads</strong><br><span class="help small">When you download your Claude or ChatGPT data export, it's imported automatically and kept in Documents → AI Chat Manager → Exports.</span></span>
       </label>
       <label class="setup-choice">
         <input id="setup-login" type="checkbox" class="switch" checked>
@@ -215,17 +215,19 @@
         <input id="open-at-login" type="checkbox" class="switch">
       </label>
       <label class="switch-row">
-        <span>Import my Claude data export automatically from Downloads</span>
+        <span>Import my data exports automatically from Downloads</span>
         <input id="watch-downloads" type="checkbox" class="switch">
       </label>
       <button type="button" id="run-setup" class="button text small">Run the first-run setup again</button>
 
       <h3>Chat history</h3>
-      <p class="help">For chats from before you installed the extension, use each platform's data export. Download the file from the email, and this app spots it in Downloads and imports it.</p>
-      <ul class="steps">
-        <li><strong>Claude:</strong> Settings → Privacy → Export data</li>
-        <li><strong>ChatGPT:</strong> Settings → Data controls → Export data</li>
-      </ul>
+      <p class="help">For chats from before you installed the extension, use each platform's data export. Ask for it below (only you can: the app never uses your login), and the platform emails you a link. Download the file, and this app imports it by itself.</p>
+      <div class="conn-actions">
+        <button type="button" id="request-claude-export" class="button tonal small"><span data-icon="openInNew"></span>Request Claude export</button>
+        <button type="button" id="request-chatgpt-export" class="button tonal small"><span data-icon="openInNew"></span>Request ChatGPT export</button>
+      </div>
+      <p class="help small">Every export file is moved into one folder, wherever it was downloaded: <span id="exports-folder" class="mono"></span></p>
+      <button type="button" id="open-exports" class="button text small"><span data-icon="folder"></span>Open exports folder</button>
 
       <h3>Sources</h3>
       <ul id="sources" class="sources"></ul>

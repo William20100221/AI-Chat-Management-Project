@@ -20,8 +20,9 @@ const {
   findCandidateFiles,
   zipEntryNames,
   mightBeClaudeExport,
+  keepExportFile,
 } = require('../src/core/chatExport');
-const { makeFakeHome, claudeExportConversations, IDS, user, assistant } = require('./fixtures');
+const { makeFakeHome, claudeExportConversations, IDS, user, assistant, jsonl, write } = require('./fixtures');
 
 const tmpDir = (prefix) => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
@@ -369,4 +370,46 @@ test('store: upgrades settings saved by version 0.1', () => {
   assert.equal(store.settings.workingDays, undefined);
   assert.deepEqual(store.data.seenFiles, { a: true });
   assert.ok(store.data.installedAt > 0, 'replies from before the upgrade are not flagged as new');
+});
+
+test('exports: every export file ends up in one folder, never overwriting another', async () => {
+  const downloads = tmpDir('acm-dl-');
+  const folder = path.join(tmpDir('acm-docs-'), 'AI Chat Manager', 'Exports');
+  const first = path.join(downloads, 'conversations-000.zip');
+  fs.writeFileSync(first, 'old export');
+  const kept = await keepExportFile(first, folder);
+  assert.equal(kept, path.join(folder, 'conversations-000.zip'));
+  assert.equal(fs.existsSync(first), false, 'moved out of Downloads');
+
+  fs.writeFileSync(first, 'new export'); // the next export has the same name
+  const second = await keepExportFile(first, folder);
+  assert.equal(second, path.join(folder, 'conversations-000 (2).zip'));
+  assert.equal(fs.readFileSync(kept, 'utf8'), 'old export', 'the earlier one is untouched');
+  assert.equal(await keepExportFile(second, folder), second, 'already there: stays put');
+});
+
+test('Claude Code sessions: Claude Code’s own live state beats guessing from the transcript', async () => {
+  const home = tmpDir('acm-live-');
+  const project = path.join(home, '.claude', 'projects', 'C--proj');
+  const sessions = path.join(home, '.claude', 'sessions');
+  const quiet = new Date(Date.now() - 20 * 60 * 1000); // 20 minutes without a word
+  const ids = { busy: 'a1111111-1111-4111-8111-111111111111', waiting: 'b2222222-2222-4222-8222-222222222222', idle: 'c3333333-3333-4333-8333-333333333333', ended: 'd4444444-4444-4444-8444-444444444444' };
+  Object.entries(ids).forEach(([state, id], n) => {
+    // Every transcript ends with Claude calling a tool, then nothing new.
+    const file = path.join(project, `${id}.jsonl`);
+    write(file, jsonl([user('Run the build', quiet.toISOString()), assistant('Running it.', quiet.toISOString(), 'tool_use')]));
+    if (state === 'idle') fs.utimesSync(file, new Date(), new Date()); // just written: looks like "replying"
+    else fs.utimesSync(file, quiet, quiet);
+    const pid = state === 'ended' ? 2 ** 30 : process.pid; // 2^30: a process that doesn't exist
+    write(path.join(sessions, `${100 + n}.json`), JSON.stringify({ pid, sessionId: id, status: state === 'ended' ? 'busy' : state }));
+  });
+  write(path.join(sessions, '12345.abc.key'), 'secret'); // never read
+
+  const { items, locations } = await new Scanner({ home, platform: 'linux', env: {} }).scan();
+  const state = (id) => itemState(items.find((i) => i.id === `code:${id}`));
+  assert.equal(state(ids.busy), 'responding', 'working, though its transcript went quiet');
+  assert.equal(state(ids.waiting), 'asking', 'waiting for you, not replying');
+  assert.equal(state(ids.idle), 'recent', 'idle, though its transcript ends mid-turn');
+  assert.equal(state(ids.ended), 'recent', 'a note from an ended session is ignored');
+  assert.ok(locations.watchDirs.includes(sessions), 'state changes trigger a rescan');
 });

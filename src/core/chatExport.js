@@ -269,6 +269,29 @@ async function mightBeClaudeExport(filePath) {
   return names.some((n) => /conversation/i.test(n) && DATA_FILE.test(n));
 }
 
+// How a file is remembered as already checked: a changed file gets looked at again.
+function fileKey(full, stat) {
+  return `${full}|${stat.size}|${Math.round(stat.mtimeMs)}`;
+}
+
+// Moves an export file into the one exports folder, wherever it was downloaded or picked from,
+// without overwriting a different file of the same name. Returns where it is now.
+async function keepExportFile(file, folder) {
+  if (path.resolve(path.dirname(file)) === path.resolve(folder)) return file;
+  await fsp.mkdir(folder, { recursive: true });
+  const { name, ext } = path.parse(file);
+  const taken = (p) => fsp.stat(p).then(() => true, () => false);
+  let target = path.join(folder, name + ext);
+  for (let n = 2; await taken(target); n++) target = path.join(folder, `${name} (${n})${ext}`);
+  try {
+    await fsp.rename(file, target);
+  } catch {
+    await fsp.copyFile(file, target); // on another drive: copy, then remove the original
+    await fsp.unlink(file).catch(() => {});
+  }
+  return target;
+}
+
 // Zip files, and small .json files that could be a manifest, that are new since we last looked.
 async function findCandidateFiles(downloadsDir, seen, maxAgeDays = 30) {
   let names;
@@ -293,7 +316,7 @@ async function findCandidateFiles(downloadsDir, seen, maxAgeDays = 30) {
     }
     if (!stat.isFile() || stat.mtimeMs < cutoff) continue;
     if (stat.size > (isZip ? MAX_ZIP_BYTES : MAX_MANIFEST_BYTES)) continue;
-    const key = `${full}|${stat.size}|${Math.round(stat.mtimeMs)}`;
+    const key = fileKey(full, stat);
     if (seen[key]) continue;
     candidates.push({ file: full, key, kind: isZip ? 'zip' : 'json', mtimeMs: stat.mtimeMs, size: stat.size });
   }
@@ -308,6 +331,8 @@ module.exports = {
   isClaudeExportUrl,
   exportPart,
   findCandidateFiles,
+  fileKey,
+  keepExportFile,
   zipEntryNames,
   mightBeClaudeExport,
 };

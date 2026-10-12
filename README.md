@@ -97,7 +97,7 @@ In July 2026 the Codex app became the new **ChatGPT desktop app**, with three mo
 - **Chat-mode chats:** not from the app. They're ordinary ChatGPT chats, kept on OpenAI's servers; the desktop app downloads them each time and doesn't save them as files. They come from **chatgpt.com** in your browser (the extension), or from your **ChatGPT data export**. Either way they show under ChatGPT → Chat.
 - **ChatGPT Classic:** detected (Settings → Sources), but it has no chat files that can be read. On a Mac its cache is encrypted with a key in the Keychain. Its chats come from chatgpt.com or the export too.
 
-**How "replying" works:** Claude Code and Codex write every message to a session file. If the newest entry is your message or a tool step, the AI is still working. Once the turn ends (a normal final reply, or Codex's "task complete"), it's finished. A turn that goes quiet for 10 minutes counts as stopped. On the websites, the extension sees the reply stream start and end.
+**How "replying" works:** Claude Code and Codex write every message to a session file. If the newest entry is your message or a tool step, the AI is still working. Once the turn ends (a normal final reply, or Codex's "task complete"), it's finished. A turn that goes quiet for 10 minutes counts as stopped. Claude Code (terminal and desktop) also notes for each running session whether it's working, waiting for you (a question or a permission prompt) or idle, in `~/.claude/sessions`; the app goes by that when it's there. It reads only the `.json` notes there, never the `.key` files. On the websites, the extension sees the reply stream start and end.
 
 **How "new reply" works:** a reply counts as seen once you open it in this app, open it on the website from here, send another message, or have that chat open in a visible, focused browser tab.
 
@@ -149,7 +149,7 @@ It relies on how each site works today. If a site changes that, the "replying" s
 
 ### Older chats: data exports
 
-For chats from before you installed the extension, download your data export and the app imports it from your Downloads folder by itself:
+For chats from before you installed the extension, use your data export. **Settings → Chat history → Request Claude export / Request ChatGPT export** opens the page where you ask for it (only you can: the app never uses your login, so it can't ask for you). When the file lands in Downloads, the app imports it by itself and moves it into **Documents → AI Chat Manager → Exports**, where all export files are kept, wherever they were downloaded or picked from. That folder outlasts an uninstall, and a fresh install imports from it again. Every two weeks, a banner suggests a new Claude export.
 
 - **Claude:** Settings → Privacy → Export data. The email gives you a small *manifest* file with one-time links. When it lands in Downloads, the app shows **Download chats**. Click it, and the app imports `conversations-000.zip` when it arrives. Older single-zip exports work too.
 - **ChatGPT:** Settings → Data controls → Export data. Download the zip from the email, and the app imports it.

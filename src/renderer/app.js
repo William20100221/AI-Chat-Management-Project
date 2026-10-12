@@ -256,6 +256,17 @@ function renderBanner() {
       button('Hide', { kind: 'text', onClick: () => { dismissHint(); renderBanner(); } }),
     );
     nodes.push(text, actions);
+  } else if (claudeExportIsOld()) {
+    const days = Math.floor((Date.now() - snap.lastImports.claude.importedAt) / DAY);
+    const text = el('p');
+    text.append(el('strong', null, `Your Claude chats were last imported ${days} days ago. `), 'Ask for a new export to bring in the newer ones.');
+    const later = () => { remindLater(); renderBanner(); };
+    const actions = el('div', 'banner-actions');
+    actions.append(
+      button('Request export', { kind: 'filled', iconName: 'openInNew', onClick: () => { backend.requestExport('claude'); later(); } }),
+      button('Later', { kind: 'text', onClick: later }),
+    );
+    nodes.push(text, actions);
   }
 
   banner.replaceChildren(...nodes);
@@ -280,6 +291,26 @@ function dismissHint() {
     localStorage.setItem('hideChatHint', '1');
   } catch {
     // storage unavailable: the hint just comes back next time
+  }
+}
+
+// An export doesn't refresh by itself, so every two weeks the app suggests a new one.
+const EXPORT_REMIND_AFTER = 14 * DAY;
+function claudeExportIsOld() {
+  const last = snap.lastImports && snap.lastImports.claude;
+  if (!last || !last.importedAt || Date.now() - last.importedAt < EXPORT_REMIND_AFTER) return false;
+  try {
+    return Date.now() - Number(localStorage.getItem('exportReminderAt') || 0) >= EXPORT_REMIND_AFTER;
+  } catch {
+    return true;
+  }
+}
+
+function remindLater() {
+  try {
+    localStorage.setItem('exportReminderAt', String(Date.now()));
+  } catch {
+    // storage unavailable: the reminder just comes back next time
   }
 }
 
@@ -1178,6 +1209,7 @@ function renderSettings() {
   $('#open-at-login-row').hidden = snap.system && snap.system.os === 'linux';
   $('#read-local').checked = s.readLocal;
   $('#watch-downloads').checked = s.watchDownloads;
+  $('#exports-folder').textContent = snap.exportsFolder || '';
   renderSources();
 }
 
@@ -1253,6 +1285,9 @@ function wire() {
   $('#read-history').addEventListener('change', (event) => backend.updateSettings({ readHistory: event.target.checked }));
   $('#read-local').addEventListener('change', (event) => backend.updateSettings({ readLocal: event.target.checked }));
   $('#open-at-login').addEventListener('change', (event) => backend.updateSettings({ openAtLogin: event.target.checked }));
+  $('#request-claude-export').addEventListener('click', () => backend.requestExport('claude'));
+  $('#request-chatgpt-export').addEventListener('click', () => backend.requestExport('chatgpt'));
+  $('#open-exports').addEventListener('click', () => backend.openExportsFolder());
   $('#run-setup').addEventListener('click', () => {
     $('#settings').close();
     backend.runSetupAgain();

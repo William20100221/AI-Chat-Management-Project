@@ -10,7 +10,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const { locateSources } = require('./paths');
 const { findRecordFiles, readRecord, findTranscriptInSessionDir } = require('./desktopSessions');
-const { parseTranscript, transcriptTitle } = require('./transcript');
+const { parseTranscript, transcriptTitle, readLiveSessions, withLiveState } = require('./transcript');
 const { codexHome, findRolloutFiles, parseRollout, readSessionIndex, isBackgroundThread, threadKind } = require('./codex');
 const { findChatGPTApps, findStateDb, readThreads } = require('./chatgptApp');
 const geminiCli = require('./geminiCli');
@@ -287,6 +287,9 @@ class Scanner {
     const sources = [];
     const liveFiles = new Set();
     const projectTranscripts = await this.indexProjectTranscripts(locations.projectsDir);
+    // Claude Code's own state of each running session, next to its projects folder.
+    const sessionsDir = locations.projectsDir && path.join(path.dirname(locations.projectsDir), 'sessions');
+    const live = sessionsDir ? await readLiveSessions(sessionsDir) : new Map();
     const claimed = new Set();
 
     for (const { root, name, exists } of locations.sessionRoots) {
@@ -316,6 +319,7 @@ class Scanner {
             summary = await this.cached(transcriptFile, parseTranscript);
           }
           const item = sessionItem(kind, record, summary, transcriptFile && this.lastWrite(transcriptFile));
+          item.activity = withLiveState(item.activity, live.get(record.cliSessionId));
           items.set(item.id, item);
           status.count++;
         } catch (err) {
@@ -347,6 +351,7 @@ class Scanner {
         const summary = await this.cached(file, parseTranscript);
         if (!summary.questions.length) continue; // title-only or empty files
         const item = terminalItem(sessionId, summary, this.lastWrite(file));
+        item.activity = withLiveState(item.activity, live.get(sessionId));
         items.set(item.id, item);
         terminal.count++;
       } catch (err) {
@@ -443,6 +448,7 @@ class Scanner {
     for (const file of this.cache.keys()) if (!liveFiles.has(file)) this.cache.delete(file);
 
     const watchDirs = [path.join(codexHome(this.locateOptions), 'sessions'), path.join(geminiCli.geminiHome(this.locateOptions), 'tmp')];
+    if (sessionsDir) watchDirs.push(sessionsDir); // a session turning busy, waiting or idle
     return { items: [...items.values()], sources, locations: { ...locations, watchDirs: local ? watchDirs : [] }, unmatched: historyResult.unmatched };
   }
 }
